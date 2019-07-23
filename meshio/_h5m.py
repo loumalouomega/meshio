@@ -1,15 +1,13 @@
-# -*- coding: utf-8 -*-
-#
 """
 I/O for h5m, cf. <https://trac.mcs.anl.gov/projects/ITAPS/wiki/MOAB/h5m>.
 """
-from datetime import datetime
 import logging
+from datetime import datetime
+
 import numpy
 
 from . import __about__
-from .mesh import Mesh
-
+from ._mesh import Mesh
 
 # def _int_to_bool_list(num):
 #     # From <https://stackoverflow.com/a/33608387/353337>.

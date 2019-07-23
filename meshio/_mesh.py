@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 import numpy
 
 
@@ -13,34 +11,37 @@ class Mesh(object):
         field_data=None,
         node_sets=None,
         gmsh_periodic=None,
+        info=None,
     ):
         self.points = points
         self.cells = cells
-        self.point_data = point_data if point_data else {}
-        self.cell_data = cell_data if cell_data else {}
-        self.field_data = field_data if field_data else {}
-        self.node_sets = node_sets if node_sets else {}
+        self.point_data = {} if point_data is None else point_data
+        self.cell_data = {} if cell_data is None else cell_data
+        self.field_data = {} if field_data is None else field_data
+        self.node_sets = {} if node_sets is None else node_sets
         self.gmsh_periodic = gmsh_periodic
+        self.info = info
         return
 
     def __repr__(self):
         lines = []
-        lines.append("Number of points: {}".format(len(self.points)))
-        lines.append("Number of elements:")
+        lines.append("<meshio mesh object>")
+        lines.append("  Number of points: {}".format(len(self.points)))
+        lines.append("  Number of elements:")
         for tpe, elems in self.cells.items():
-            lines.append("  {}: {}".format(tpe, len(elems)))
+            lines.append("    {}: {}".format(tpe, len(elems)))
 
         if self.node_sets:
-            lines.append("Node sets: {}".format(", ".join(self.node_sets.keys())))
+            lines.append("  Node sets: {}".format(", ".join(self.node_sets.keys())))
 
         if self.point_data:
-            lines.append("Point data: {}".format(", ".join(self.point_data.keys())))
+            lines.append("  Point data: {}".format(", ".join(self.point_data.keys())))
 
         cell_data_keys = set()
         for cell_type in self.cell_data:
             cell_data_keys = cell_data_keys.union(self.cell_data[cell_type].keys())
         if cell_data_keys:
-            lines.append("Cell data: {}".format(", ".join(cell_data_keys)))
+            lines.append("  Cell data: {}".format(", ".join(cell_data_keys)))
 
         return "\n".join(lines)
 

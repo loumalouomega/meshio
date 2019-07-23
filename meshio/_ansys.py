@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 """
 I/O for Ansys's msh format, cf.
 <http://www.afs.enea.it/fluent/Public/Fluent-Doc/PDF/chp03.pdf>.
@@ -10,7 +8,7 @@ import re
 import numpy
 
 from .__about__ import __version__
-from .mesh import Mesh
+from ._mesh import Mesh
 
 
 def _skip_to(f, char):
@@ -366,7 +364,8 @@ def write(filename, mesh, write_binary=True):
         fh.write(('(1 "meshio {}")\n'.format(__version__)).encode("utf8"))
 
         # dimension
-        dim = 2 if all(mesh.points[:, 2] == 0.0) else 3
+        dim = mesh.points.shape[1]
+        assert dim in [2, 3]
         fh.write(("(2 {})\n".format(dim)).encode("utf8"))
 
         # total number of nodes
@@ -385,7 +384,7 @@ def write(filename, mesh, write_binary=True):
         key = "3010" if write_binary else "10"
         fh.write(
             (
-                "({} (1 {:x} {:x} 1 {:x}))(\n".format(
+                "({} (1 {:x} {:x} 1 {:x})(\n".format(
                     key, first_node_index, mesh.points.shape[0], mesh.points.shape[1]
                 )
             ).encode("utf8")

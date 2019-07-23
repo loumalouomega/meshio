@@ -1,16 +1,26 @@
-# -*- coding: utf-8 -*-
-#
 """
 Convert a mesh file to another.
 """
-from __future__ import print_function
-
 import sys
 
 import numpy
 
-from .__about__ import __version__
-from .helpers import read, write, input_filetypes, output_filetypes
+from .__about__ import __copyright__, __version__
+from ._helpers import input_filetypes, output_filetypes, read, write
+
+
+def _get_version_text():
+    return "\n".join(
+        [
+            "meshio {} [Python {}.{}.{}]".format(
+                __version__,
+                sys.version_info.major,
+                sys.version_info.minor,
+                sys.version_info.micro,
+            ),
+            __copyright__,
+        ]
+    )
 
 
 def main(argv=None):
@@ -25,6 +35,13 @@ def main(argv=None):
     if args.prune:
         mesh.prune()
 
+    if (
+        args.prune_z_0
+        and mesh.points.shape[1] == 3
+        and numpy.all(numpy.abs(mesh.points[:, 2]) < 1.0e-13)
+    ):
+        mesh.points = mesh.points[:, :2]
+
     # Some converters (like VTK) require `points` to be contiguous.
     mesh.points = numpy.ascontiguousarray(mesh.points)
 
@@ -37,7 +54,10 @@ def _get_parser():
     """Parse input options."""
     import argparse
 
-    parser = argparse.ArgumentParser(description=("Convert between mesh formats."))
+    parser = argparse.ArgumentParser(
+        description=("Convert between mesh formats."),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
 
     parser.add_argument("infile", type=str, help="mesh file to be read from")
 
@@ -69,10 +89,17 @@ def _get_parser():
     )
 
     parser.add_argument(
+        "--prune-z-0",
+        "-z",
+        action="store_true",
+        help="remove third (z) dimension if all points are 0",
+    )
+
+    parser.add_argument(
         "--version",
         "-v",
         action="version",
-        version="%(prog)s {}, Python {}".format(__version__, sys.version),
+        version=_get_version_text(),
         help="display version information",
     )
 

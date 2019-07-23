@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 """
 I/O for DOLFIN's XML format, cf.
 <https://people.sc.fsu.edu/~jburkardt/data/dolfin_xml/dolfin_xml.html>.
@@ -10,7 +8,7 @@ import re
 
 import numpy
 
-from .mesh import Mesh
+from ._mesh import Mesh
 
 
 def _read_mesh(filename):
@@ -36,16 +34,13 @@ def _read_mesh(filename):
             cell_type, npc = dolfin_to_meshio_type[elem.attrib["celltype"]]
             cell_tags = ["v{}".format(i) for i in range(npc)]
         elif elem.tag == "vertices":
-            points = numpy.empty((int(elem.attrib["size"]), 3))
+            points = numpy.empty((int(elem.attrib["size"]), dim))
             keys = ["x", "y"]
-            if dim == 2:
-                points[:, 2] = 0.0
-            else:
-                assert dim == 3
+            if dim == 3:
                 keys += ["z"]
         elif elem.tag == "vertex":
             k = int(elem.attrib["index"])
-            points[k][:dim] = [elem.attrib[key] for key in keys]
+            points[k] = [elem.attrib[key] for key in keys]
         elif elem.tag == "cells":
             cells = {cell_type: numpy.empty((int(elem.attrib["size"]), npc), dtype=int)}
         elif elem.tag in ["triangle", "tetrahedron"]:
@@ -129,22 +124,19 @@ def _write_mesh(filename, points, cell_type, cells):
             ", ".join(discarded_cells),
         )
 
-    dim = 2 if all(points[:, 2] == 0) else 3
+    dim = points.shape[1]
+    assert dim in [2, 3]
+    coord_names = ["x", "y"]
+    if dim == 3:
+        coord_names += ["z"]
 
     mesh = ET.SubElement(
         dolfin, "mesh", celltype=meshio_to_dolfin_type[cell_type], dim=str(dim)
     )
     vertices = ET.SubElement(mesh, "vertices", size=str(len(points)))
-
     for k, point in enumerate(points):
-        ET.SubElement(
-            vertices,
-            "vertex",
-            index=str(k),
-            x=repr(point[0]),
-            y=repr(point[1]),
-            z=repr(point[2]),
-        )
+        coords = {xyz: repr(p) for xyz, p in zip(coord_names, point)}
+        ET.SubElement(vertices, "vertex", index=str(k), **coords)
 
     num_cells = 0
     for cls in stripped_cells.values():
@@ -216,6 +208,6 @@ def write(filename, mesh):
     if cell_type in mesh.cell_data:
         for key, data in mesh.cell_data[cell_type].items():
             cell_data_filename = "{}_{}.xml".format(os.path.splitext(filename)[0], key)
-            dim = 2 if all(mesh.points[:, 2] == 0) else 3
+            dim = 2 if mesh.points.shape[1] == 2 or all(mesh.points[:, 2] == 0) else 3
             _write_cell_data(cell_data_filename, dim, numpy.array(data))
     return

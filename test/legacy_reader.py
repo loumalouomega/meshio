@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
-#
 import numpy
 
-from meshio.vtk_io import vtk_to_meshio_type
 from meshio import Mesh
+from meshio.vtk_io import vtk_to_meshio_type
 
 
 def read(filetype, filename):
@@ -42,14 +40,24 @@ def read(filetype, filename):
             os = offsets[numpy.argwhere(types == vtk_type).transpose()[0]]
             num_cells = len(os)
             if num_cells > 0:
-                num_pts = data[os[0]]
-                # instantiate the array
-                arr = numpy.empty((num_cells, num_pts), dtype=int)
-                # sort the num_pts entries after the offsets into the columns
-                # of arr
-                for k in range(num_pts):
-                    arr[:, k] = data[os + k + 1]
-                cells[meshio_type] = arr
+                if meshio_type == "polygon":
+                    for idx_cell in range(num_cells):
+                        num_pts = data[os[idx_cell]]
+                        cell = data[os[idx_cell] + 1 : os[idx_cell] + 1 + num_pts]
+                        key = meshio_type + str(num_pts)
+                        if key in cells:
+                            cells[key] = numpy.vstack([cells[key], cell])
+                        else:
+                            cells[key] = cell
+                else:
+                    num_pts = data[os[0]]
+                    # instantiate the array
+                    arr = numpy.empty((num_cells, num_pts), dtype=int)
+                    # store the num_pts entries after the offsets into the columns
+                    # of arr
+                    for k in range(num_pts):
+                        arr[:, k] = data[os + k + 1]
+                    cells[meshio_type] = arr
 
         return cells
 

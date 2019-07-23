@@ -1,13 +1,14 @@
-# -*- coding: utf-8 -*-
-#
 """
 I/O for the OFF surface format, cf.
-<https://en.wikipedia.org/wiki/OFF_(file_format)>.
+<https://en.wikipedia.org/wiki/OFF_(file_format)>,
+<http://www.geomview.org/docs/html/OFF.html>.
 """
+import logging
 from itertools import islice
+
 import numpy
 
-from .mesh import Mesh
+from ._mesh import Mesh
 
 
 def read(filename):
@@ -77,7 +78,9 @@ def read_buffer(f):
 
         data = stripped.split()
         num_points = int(data[0])
-        assert num_points == len(data) - 1
+        # Don't be too strict with the len(data) assertions here; the OFF specifications
+        # allows for RGB colors.
+        # assert num_points == len(data) - 1
         assert num_points == 3, "Can only handle triangular faces"
 
         data = [int(data[1]), int(data[2]), int(data[3])]
@@ -91,6 +94,15 @@ def read_buffer(f):
 
 
 def write(filename, mesh):
+    if mesh.points.shape[1] == 2:
+        logging.warning(
+            "OFF requires 3D points, but 2D points given. "
+            "Appending 0 third component."
+        )
+        mesh.points = numpy.column_stack(
+            [mesh.points[:, 0], mesh.points[:, 1], numpy.zeros(mesh.points.shape[0])]
+        )
+
     for key in mesh.cells:
         assert key in ["triangle"], "Can only deal with triangular faces"
 

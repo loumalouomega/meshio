@@ -1,24 +1,22 @@
-# -*- coding: utf-8 -*-
-#
 """
 I/O for VTU.
 """
 import base64
 import logging
-
-try:
-    from StringIO import cStringIO as BytesIO
-except ImportError:
-    from io import BytesIO
 import sys
 import zlib
 
 import numpy
 
 from .__about__ import __version__
-from .mesh import Mesh
-from .vtk_io import vtk_to_meshio_type, meshio_to_vtk_type, raw_from_cell_data
-from .gmsh_io import num_nodes_per_cell
+from ._common import num_nodes_per_cell, write_xml
+from ._mesh import Mesh
+from ._vtk import meshio_to_vtk_type, raw_from_cell_data, vtk_to_meshio_type
+
+try:
+    from StringIO import cStringIO as BytesIO
+except ImportError:
+    from io import BytesIO
 
 
 def num_bytes_to_num_base64_chars(num_bytes):
@@ -46,11 +44,62 @@ def _cells_from_data(connectivity, offsets, types, cell_data_raw):
         meshio_type = vtk_to_meshio_type[tpe]
         n = num_nodes_per_cell[meshio_type]
         # The offsets point to the _end_ of the indices
-        indices = numpy.add.outer(offsets[b], numpy.arange(-n, 0))
+        indices = numpy.add.outer(offsets[b], numpy.arange(-n, 0, dtype=offsets.dtype))
         cells[meshio_type] = connectivity[indices]
         cell_data[meshio_type] = {key: value[b] for key, value in cell_data_raw.items()}
 
     return cells, cell_data
+
+
+def _organize_cells(point_offsets, cells, cell_data_raw):
+    assert len(point_offsets) == len(cells)
+
+    out_cells = {}
+    out_cell_data = {}
+    for offset, cls, cdr in zip(point_offsets, cells, cell_data_raw):
+        cls, cell_data = _cells_from_data(
+            cls["connectivity"], cls["offsets"], cls["types"], cdr
+        )
+        for key in cls:
+            if key not in out_cells:
+                out_cells[key] = []
+            out_cells[key].append(cls[key] + offset)
+
+            if key not in out_cell_data:
+                out_cell_data[key] = {}
+
+            for name in cell_data[key]:
+                if name not in out_cell_data[key]:
+                    out_cell_data[key][name] = []
+                out_cell_data[key][name].append(cell_data[key][name])
+
+    for key in out_cells:
+        out_cells[key] = numpy.concatenate(out_cells[key])
+        for name in out_cell_data[key]:
+            out_cell_data[key][name] = numpy.concatenate(out_cell_data[key][name])
+
+    return out_cells, out_cell_data
+
+
+def get_grid(root):
+    grid = None
+    appended_data = None
+    for c in root:
+        if c.tag == "UnstructuredGrid":
+            assert grid is None, "More than one UnstructuredGrid found."
+            grid = c
+        else:
+            assert c.tag == "AppendedData", "Unknown main tag '{}'.".format(c.tag)
+            assert appended_data is None, "More than one AppendedData found."
+            assert c.attrib["encoding"] == "base64"
+            appended_data = c.text.strip()
+            # The appended data always begins with a (meaningless)
+            # underscore.
+            assert appended_data[0] == "_"
+            appended_data = appended_data[1:]
+
+    assert grid is not None, "No UnstructuredGrid found."
+    return grid, appended_data
 
 
 vtu_to_numpy_type = {
@@ -76,12 +125,6 @@ class VtuReader(object):
 
     def __init__(self, filename):
         from lxml import etree as ET
-
-        points = None
-        point_data = {}
-        cell_data_raw = {}
-        cells = {}
-        field_data = {}
 
         # libxml2 and with it lxml have a safety net for memory overflows; see,
         # e.g., <https://stackoverflow.com/q/33828728/353337>.
@@ -123,86 +166,102 @@ class VtuReader(object):
         except KeyError:
             self.byte_order = None
 
-        grid = None
-        self.appended_data = None
-        for c in root:
-            if c.tag == "UnstructuredGrid":
-                assert grid is None, "More than one UnstructuredGrid found."
-                grid = c
-            else:
-                assert c.tag == "AppendedData", "Unknown main tag '{}'.".format(c.tag)
-                assert self.appended_data is None, "More than one AppendedData found."
-                assert c.attrib["encoding"] == "base64"
-                self.appended_data = c.text.strip()
-                # The appended data always begins with a (meaningless)
-                # underscore.
-                assert self.appended_data[0] == "_"
-                self.appended_data = self.appended_data[1:]
+        grid, self.appended_data = get_grid(root)
 
-        assert grid is not None, "No UnstructuredGrid found."
-
-        piece = None
+        pieces = []
+        field_data = {}
         for c in grid:
             if c.tag == "Piece":
-                assert piece is None, "More than one Piece found."
-                piece = c
+                pieces.append(c)
             else:
                 assert c.tag == "FieldData", "Unknown grid subtag '{}'.".format(c.tag)
                 # TODO test field data
                 for data_array in c:
                     field_data[data_array.attrib["Name"]] = self.read_data(data_array)
 
-        assert piece is not None, "No Piece found."
+        assert pieces, "No Piece found."
 
-        num_points = int(piece.attrib["NumberOfPoints"])
-        num_cells = int(piece.attrib["NumberOfCells"])
+        points = []
+        cells = []
+        point_data = []
+        cell_data_raw = []
 
-        for child in piece:
-            if child.tag == "Points":
-                data_arrays = list(child)
-                assert len(data_arrays) == 1
-                data_array = data_arrays[0]
+        for piece in pieces:
+            piece_cells = {}
+            piece_point_data = {}
+            piece_cell_data_raw = {}
 
-                assert data_array.tag == "DataArray"
+            num_points = int(piece.attrib["NumberOfPoints"])
+            num_cells = int(piece.attrib["NumberOfCells"])
 
-                points = self.read_data(data_array)
+            for child in piece:
+                if child.tag == "Points":
+                    data_arrays = list(child)
+                    assert len(data_arrays) == 1
+                    data_array = data_arrays[0]
 
-                num_components = int(data_array.attrib["NumberOfComponents"])
-                points = points.reshape(num_points, num_components)
-
-            elif child.tag == "Cells":
-                for data_array in child:
                     assert data_array.tag == "DataArray"
-                    cells[data_array.attrib["Name"]] = self.read_data(data_array)
 
-                assert len(cells["offsets"]) == num_cells
-                assert len(cells["types"]) == num_cells
+                    pts = self.read_data(data_array)
 
-            elif child.tag == "PointData":
-                for c in child:
-                    assert c.tag == "DataArray"
-                    point_data[c.attrib["Name"]] = self.read_data(c)
+                    num_components = int(data_array.attrib["NumberOfComponents"])
+                    points.append(pts.reshape(num_points, num_components))
 
-            else:
-                assert child.tag == "CellData", "Unknown tag '{}'.".format(child.tag)
+                elif child.tag == "Cells":
+                    for data_array in child:
+                        assert data_array.tag == "DataArray"
+                        piece_cells[data_array.attrib["Name"]] = self.read_data(
+                            data_array
+                        )
 
-                for c in child:
-                    assert c.tag == "DataArray"
-                    cell_data_raw[c.attrib["Name"]] = self.read_data(c)
+                    assert len(piece_cells["offsets"]) == num_cells
+                    assert len(piece_cells["types"]) == num_cells
 
-        assert points is not None
-        assert "connectivity" in cells
-        assert "offsets" in cells
-        assert "types" in cells
+                    cells.append(piece_cells)
 
-        cells, cell_data = _cells_from_data(
-            cells["connectivity"], cells["offsets"], cells["types"], cell_data_raw
+                elif child.tag == "PointData":
+                    for c in child:
+                        assert c.tag == "DataArray"
+                        piece_point_data[c.attrib["Name"]] = self.read_data(c)
+
+                    point_data.append(piece_point_data)
+
+                else:
+                    assert child.tag == "CellData", "Unknown tag '{}'.".format(
+                        child.tag
+                    )
+
+                    for c in child:
+                        assert c.tag == "DataArray"
+                        piece_cell_data_raw[c.attrib["Name"]] = self.read_data(c)
+
+                    cell_data_raw.append(piece_cell_data_raw)
+
+        if not cell_data_raw:
+            cell_data_raw = [{}] * len(cells)
+
+        assert len(cell_data_raw) == len(cells)
+
+        point_offsets = (
+            numpy.cumsum([pts.shape[0] for pts in points]) - points[0].shape[0]
         )
 
-        self.points = points
-        self.cells = cells
-        self.point_data = point_data
-        self.cell_data = cell_data
+        # Now merge across pieces
+        assert points
+        self.points = numpy.concatenate(points)
+
+        if point_data:
+            self.point_data = {
+                key: numpy.concatenate([pd[key] for pd in point_data])
+                for key in point_data[0]
+            }
+        else:
+            self.point_data = None
+
+        self.cells, self.cell_data = _organize_cells(
+            point_offsets, cells, cell_data_raw
+        )
+
         self.field_data = field_data
         return
 
@@ -249,19 +308,18 @@ class VtuReader(object):
         return block_data
 
     def read_data(self, c):
-        if c.attrib["format"] == "ascii":
+        fmt = c.attrib["format"] if "format" in c.attrib else "ascii"
+
+        if fmt == "ascii":
             # ascii
             data = numpy.array(
                 c.text.split(), dtype=vtu_to_numpy_type[c.attrib["type"]]
             )
-        elif c.attrib["format"] == "binary":
+        elif fmt == "binary":
             data = self.read_binary(c.text.strip(), c.attrib["type"])
         else:
             # appended data
-            assert c.attrib["format"] == "appended", "Unknown data format '{}'.".format(
-                c.attrib["format"]
-            )
-
+            assert fmt == "appended", "Unknown data format '{}'.".format(fmt)
             offset = int(c.attrib["offset"])
             data = self.read_binary(self.appended_data[offset:], c.attrib["type"])
 
@@ -281,11 +339,29 @@ def read(filename):
     )
 
 
+def _chunk_it(array, n):
+    out = []
+    k = 0
+    while k * n < len(array):
+        out.append(array[k * n : (k + 1) * n])
+        k += 1
+    return out
+
+
 def write(filename, mesh, write_binary=True, pretty_xml=True):
     from lxml import etree as ET
 
     if not write_binary:
         logging.warning("VTU ASCII files are only meant for debugging.")
+
+    if mesh.points.shape[1] == 2:
+        logging.warning(
+            "VTU requires 3D points, but 2D points given. "
+            "Appending 0 third component."
+        )
+        mesh.points = numpy.column_stack(
+            [mesh.points[:, 0], mesh.points[:, 1], numpy.zeros(mesh.points.shape[0])]
+        )
 
     header_type = "UInt32"
 
@@ -312,14 +388,6 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
     for data in mesh.field_data.values():
         data = data.astype(data.dtype.newbyteorder("="))
 
-    def chunk_it(array, n):
-        out = []
-        k = 0
-        while k * n < len(array):
-            out.append(array[k * n : (k + 1) * n])
-            k += 1
-        return out
-
     def numpy_to_xml_array(parent, name, fmt, data):
         da = ET.SubElement(
             parent, "DataArray", type=numpy_to_vtu_type[data.dtype], Name=name
@@ -330,7 +398,7 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
             da.set("format", "binary")
             max_block_size = 32768
             data_bytes = data.tostring()
-            blocks = chunk_it(data_bytes, max_block_size)
+            blocks = _chunk_it(data_bytes, max_block_size)
             num_blocks = len(blocks)
             last_block_size = len(blocks[-1])
 
@@ -404,12 +472,4 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
             numpy_to_xml_array(cd, name, "%.11e", data)
 
     write_xml(filename, vtk_file, pretty_xml)
-    return
-
-
-def write_xml(filename, root, pretty_print=False):
-    from lxml import etree as ET
-
-    tree = ET.ElementTree(root)
-    tree.write(filename, pretty_print=pretty_print)
     return

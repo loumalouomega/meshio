@@ -1,14 +1,8 @@
-# -*- coding: utf-8 -*-
-#
 import pytest
 
+import helpers
 import meshio
 
-import helpers
-import legacy_reader
-import legacy_writer
-
-vtk = pytest.importorskip("vtk")
 lxml = pytest.importorskip("lxml")
 
 test_set = [
@@ -34,7 +28,7 @@ test_set = [
 @pytest.mark.parametrize("write_binary", [False, True])
 def test(mesh, write_binary):
     def writer(*args, **kwargs):
-        return meshio.vtu_io.write(
+        return meshio._vtu.write(
             *args,
             write_binary=write_binary,
             # don't use pretty xml to increase test coverage
@@ -45,38 +39,7 @@ def test(mesh, write_binary):
     # ASCII files are only meant for debugging, VTK stores only 11 digits
     # <https://gitlab.kitware.com/vtk/vtk/issues/17038#note_264052>
     tol = 1.0e-15 if write_binary else 1.0e-11
-    helpers.write_read(writer, meshio.vtu_io.read, mesh, tol)
-    return
-
-
-@pytest.mark.parametrize("mesh", test_set)
-@pytest.mark.parametrize("write_binary", [False, True])
-def test_legacy_writer(mesh, write_binary):
-    # test with legacy writer
-    def lw(*args, **kwargs):
-        mode = "vtu-binary" if write_binary else "vtu-ascii"
-        return legacy_writer.write(mode, *args, **kwargs)
-
-    # The legacy writer only writes with low precision.
-    tol = 1.0e-15 if write_binary else 1.0e-11
-    helpers.write_read(lw, meshio.vtu_io.read, mesh, tol)
-    return
-
-
-@pytest.mark.parametrize("mesh", test_set)
-@pytest.mark.parametrize("write_binary", [False, True])
-def test_legacy_reader(mesh, write_binary):
-    def writer(*args, **kwargs):
-        return meshio.vtu_io.write(*args, write_binary=write_binary, **kwargs)
-
-    # test with legacy reader
-    def lr(filename):
-        mode = "vtu-binary" if write_binary else "vtu-ascii"
-        return legacy_reader.read(mode, filename)
-
-    # the legacy reader only reads at low precision
-    tol = 1.0e-15 if write_binary else 1.0e-11
-    helpers.write_read(writer, lr, mesh, tol)
+    helpers.write_read(writer, meshio._vtu.read, mesh, tol)
     return
 
 

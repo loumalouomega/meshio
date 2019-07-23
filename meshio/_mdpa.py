@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 """
 I/O for KratosMultiphysics's mdpa format, cf.
 <https://github.com/KratosMultiphysics/Kratos/wiki/Input-data>.
@@ -8,9 +6,9 @@ import logging
 
 import numpy
 
-from .mesh import Mesh
-from .vtk_io import raw_from_cell_data
-from .gmsh_io import num_nodes_per_cell
+from ._common import num_nodes_per_cell
+from ._mesh import Mesh
+from ._vtk import raw_from_cell_data
 
 ## We check if we can read/write the mesh natively from Kratos
 # TODO: Implement native reading
@@ -434,7 +432,7 @@ def _write_elements_and_conditions(
 
 def _write_data(fh, tag, name, data, write_binary):
     assert not write_binary
-    fh.write("Begin " + tag + " " + name + "\n\n".encode("utf-8"))
+    fh.write(("Begin " + tag + " " + name + "\n\n").encode("utf-8"))
     # number of components
     num_components = data.shape[1] if len(data.shape) > 1 else 1
 
@@ -453,7 +451,7 @@ def _write_data(fh, tag, name, data, write_binary):
         for k, x in enumerate(data):
             fh.write(fmt.format(k + 1, *x).encode("utf-8"))
 
-    fh.write("End " + tag + " " + name + "\n\n".encode("utf-8"))
+    fh.write(("End " + tag + " " + name + "\n\n").encode("utf-8"))
     return
 
 
@@ -462,6 +460,14 @@ def write(filename, mesh, write_binary=False):
     <https://github.com/KratosMultiphysics/Kratos/wiki/Input-data>.
     """
     assert not write_binary
+    if mesh.points.shape[1] == 2:
+        logging.warning(
+            "mdpa requires 3D points, but 2D points given. "
+            "Appending 0 third component."
+        )
+        mesh.points = numpy.column_stack(
+            [mesh.points[:, 0], mesh.points[:, 1], numpy.zeros(mesh.points.shape[0])]
+        )
 
     # Kratos cells are mostly ordered like VTK, with a few exceptions:
     cells = mesh.cells.copy()

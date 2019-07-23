@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
-#
 """
 I/O for Abaqus inp files.
 """
+import logging
+
 import numpy
 
 from .__about__ import __version__
-from .mesh import Mesh
-
+from ._mesh import Mesh
 
 abaqus_to_meshio_type = {
     # trusss
@@ -82,6 +81,9 @@ abaqus_to_meshio_type = {
     #
     # "PYRAMID": "pyramid",
     "C3D6": "wedge",
+    #
+    # 4-node bilinear displacement and pore pressure
+    "CAX4P": "quad",
 }
 meshio_to_abaqus_type = {v: k for k, v in abaqus_to_meshio_type.items()}
 
@@ -109,35 +111,33 @@ def read_buffer(f):
             # EOF
             break
 
-        if line.startswith("*"):
-            word = line.strip("*").upper()
-            if word == "HEADING":
-                pass
-            elif word.startswith("PREPRINT"):
-                pass
-            elif word.startswith("NODE"):
-                points, point_gids = _read_nodes(f)
-            elif word.startswith("ELEMENT"):
-                key, idx = _read_cells(f, word)
-                cells[key] = idx
-            elif word.startswith("NSET"):
-                params_map = get_param_map(word, required_keys=["NSET"])
-                setids = read_set(f, params_map)
-                name = params_map["NSET"]
-                if name not in nsets:
-                    nsets[name] = []
-                nsets[name].append(setids)
-            elif word.startswith("ELSET"):
-                params_map = get_param_map(word, required_keys=["ELSET"])
-                setids = read_set(f, params_map)
-                name = params_map["ELSET"]
-                if name not in elsets:
-                    elsets[name] = []
-                elsets[name].append(setids)
-            else:
-                pass
+        # Comments
+        if line.startswith("**"):
+            continue
 
-    cells = _scan_cells(point_gids, cells)
+        keyword = line.strip("*").upper()
+        if keyword.startswith("NODE"):
+            points, point_gids = _read_nodes(f)
+        elif keyword.startswith("ELEMENT"):
+            key, idx = _read_cells(f, keyword, point_gids)
+            cells[key] = idx
+        elif keyword.startswith("NSET"):
+            params_map = get_param_map(keyword, required_keys=["NSET"])
+            setids = read_set(f, params_map)
+            name = params_map["NSET"]
+            if name not in nsets:
+                nsets[name] = []
+            nsets[name].append(setids)
+        elif keyword.startswith("ELSET"):
+            params_map = get_param_map(keyword, required_keys=["ELSET"])
+            setids = read_set(f, params_map)
+            name = params_map["ELSET"]
+            if name not in elsets:
+                elsets[name] = []
+            elsets[name].append(setids)
+        else:
+            # There are just too many Abaqus keywords to explicitly skip them.
+            pass
 
     return Mesh(
         points, cells, point_data=point_data, cell_data=cell_data, field_data=field_data
@@ -146,7 +146,8 @@ def read_buffer(f):
 
 def _read_nodes(f):
     points = []
-    point_gids = []
+    point_gids = {}
+    index = 0
     while True:
         last_pos = f.tell()
         line = f.readline()
@@ -154,14 +155,15 @@ def _read_nodes(f):
             break
         entries = line.strip().split(",")
         gid, x = entries[0], entries[1:]
-        point_gids.append(int(gid))
+        point_gids[int(gid)] = index
         points.append([float(xx) for xx in x])
+        index += 1
 
     f.seek(last_pos)
-    return numpy.array(points, dtype=float), numpy.array(point_gids, dtype=int)
+    return numpy.array(points, dtype=float), point_gids
 
 
-def _read_cells(f, line0):
+def _read_cells(f, line0, point_gids):
     sline = line0.split(",")[1:]
     etype_sline = sline[0]
     assert "TYPE" in etype_sline, etype_sline
@@ -175,21 +177,14 @@ def _read_cells(f, line0):
     while True:
         last_pos = f.tell()
         line = f.readline()
-        if line.startswith("*"):
+        if line.startswith("*") or line == "":
             break
         entries = [int(k) for k in filter(None, line.split(","))]
-        idx = entries[1:]
+        idx = [point_gids[k] for k in entries[1:]]
         cells.append(idx)
 
     f.seek(last_pos)
     return cell_type, numpy.array(cells)
-
-
-def _scan_cells(point_gids, cells):
-    for arr in cells.values():
-        for value in numpy.nditer(arr, op_flags=["readwrite"]):
-            value[...] = numpy.flatnonzero(point_gids == value)[0]
-    return cells
 
 
 def get_param_map(word, required_keys=None):
@@ -254,6 +249,15 @@ def read_set(f, params_map):
 
 
 def write(filename, mesh):
+    if mesh.points.shape[1] == 2:
+        logging.warning(
+            "Abaqus requires 3D points, but 2D points given. "
+            "Appending 0 third component."
+        )
+        mesh.points = numpy.column_stack(
+            [mesh.points[:, 0], mesh.points[:, 1], numpy.zeros(mesh.points.shape[0])]
+        )
+
     with open(filename, "wt") as f:
         f.write("*Heading\n")
         f.write(" Abaqus DataFile Version 6.14\n")

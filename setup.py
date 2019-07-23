@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
-#
 import codecs
 import os
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 # https://packaging.python.org/single_source_version/
 base_dir = os.path.abspath(os.path.dirname(__file__))
@@ -28,7 +26,8 @@ setup(
     url="https://github.com/nschloe/meshio",
     license=about["__license__"],
     platforms="any",
-    install_requires=["numpy", "pipdate >=0.3.0, <0.4.0"],
+    install_requires=["numpy"],
+    python_requires=">=3",
     extras_require={
         "all": ["netCDF4", "h5py", "lxml"],
         "exodus": ["netCDF4"],
