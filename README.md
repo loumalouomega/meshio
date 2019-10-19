@@ -3,30 +3,34 @@
   <p align="center">I/O for mesh files.</p>
 </p>
 
-[![CircleCI](https://img.shields.io/circleci/project/github/nschloe/meshio/master.svg?style=flat-square)](https://circleci.com/gh/nschloe/meshio)
+![gh-actions](https://github.com/nschloe/meshio/workflows/ci/badge.svg)
 [![codecov](https://img.shields.io/codecov/c/github/nschloe/meshio.svg?style=flat-square)](https://codecov.io/gh/nschloe/meshio)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/ambv/black)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/psf/black)
 [![PyPi Version](https://img.shields.io/pypi/v/meshio.svg?style=flat-square)](https://pypi.org/project/meshio)
 [![Debian CI](https://badges.debian.net/badges/debian/testing/python3-meshio/version.svg?style=flat-square)](https://tracker.debian.org/pkg/python-meshio)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1173115.svg?style=flat-square)](https://doi.org/10.5281/zenodo.1173115)
 [![GitHub stars](https://img.shields.io/github/stars/nschloe/meshio.svg?style=flat-square&logo=github&label=Stars&logoColor=white)](https://github.com/nschloe/meshio)
-[![PyPi downloads](https://img.shields.io/pypi/dd/meshio.svg?style=flat-square)](https://pypistats.org/packages/meshio)
+[![PyPi downloads](https://img.shields.io/pypi/dm/meshio.svg?style=flat-square)](https://pypistats.org/packages/meshio)
 
 There are various mesh formats available for representing unstructured meshes.
 meshio can read and write all of the following and smoothly converts between them:
 
  * [Abaqus](http://abaqus.software.polimi.it/v6.14/index.html)
- * [ANSYS msh](http://www.afs.enea.it/fluent/Public/Fluent-Doc/PDF/chp03.pdf)
- * [DOLFIN XML](http://manpages.ubuntu.com/manpages/wily/man1/dolfin-convert.1.html)
+ * [ANSYS msh](https://www.afs.enea.it/fluent/Public/Fluent-Doc/PDF/chp03.pdf)
+ * [DOLFIN XML](https://manpages.ubuntu.com/manpages/disco/man1/dolfin-convert.1.html)
  * [Exodus](https://cubit.sandia.gov/public/13.2/help_manual/WebHelp/finite_element_model/exodus/block_specification.htm)
+ * [FLAC3D](https://www.itascacg.com/software/flac3d)
  * [H5M](https://www.mcs.anl.gov/~fathom/moab-docs/h5mmain.html)
  * [Kratos/MDPA](https://github.com/KratosMultiphysics/Kratos/wiki/Input-data)
  * [Medit](https://people.sc.fsu.edu/~jburkardt/data/medit/medit.html)
  * [MED/Salome](https://docs.salome-platform.org/latest/dev/MEDCoupling/developer/med-file.html)
+ * [Nastran](https://help.autodesk.com/view/NSTRN/2019/ENU/?guid=GUID-42B54ACB-FBE3-47CA-B8FE-475E7AD91A00) (bulk data)
  * [Gmsh](http://gmsh.info/doc/texinfo/gmsh.html#File-formats) (versions 2 and 4)
- * [OFF](http://segeval.cs.princeton.edu/public/off_format.html)
- * [PERMAS](http://www.intes.de)
+ * [OFF](https://segeval.cs.princeton.edu/public/off_format.html)
+ * [PERMAS](https://www.intes.de)
+ * [PLY](https://en.wikipedia.org/wiki/PLY_(file_format)<Paste>)
  * [STL](https://en.wikipedia.org/wiki/STL_(file_format))
+ * [TetGen .node/.ele](https://wias-berlin.de/software/tetgen/fformats.html)
  * [SVG](https://www.w3.org/TR/SVG/) (2D only, output only)
  * [VTK](https://www.vtk.org/wp-content/uploads/2015/04/file-formats.pdf)
  * [VTU](https://www.vtk.org/Wiki/VTK_XML_Formats)
@@ -84,17 +88,17 @@ For both input and output, you can optionally specify the exact `file_format`
 The [XDMF format](http://www.xdmf.org/index.php/XDMF_Model_and_Format) supports time
 series with a shared mesh. You can write times series data using meshio with
 ```python
-writer = meshio.XdmfTimeSeriesWriter(filename)
-writer.write_points_cells(points, cells)
-for t in [0.0, 0.1, 0.21]:
-    writer.write_data(t, point_data={"phi": data})
+with meshio.XdmfTimeSeriesWriter(filename) as writer:
+    writer.write_points_cells(points, cells)
+    for t in [0.0, 0.1, 0.21]:
+        writer.write_data(t, point_data={"phi": data})
 ```
 and read it with
 ```python
-reader = meshio.XdmfTimeSeriesReader(filename)
-points, cells = reader.read_points_cells()
-for k in range(reader.num_steps):
-    t, point_data, cell_data = reader.read_data(k)
+with meshio.XdmfTimeSeriesReader(filename) as reader:
+    points, cells = reader.read_points_cells()
+    for k in range(reader.num_steps):
+        t, point_data, cell_data = reader.read_data(k)
 ```
 
 ### Installation

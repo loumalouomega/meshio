@@ -29,7 +29,7 @@ def read(filename):
     return XdmfReader(filename).read()
 
 
-class XdmfReader(object):
+class XdmfReader:
     def __init__(self, filename):
         self.filename = filename
         return
@@ -52,7 +52,7 @@ class XdmfReader(object):
 
         return self.read_xdmf3(root)
 
-    def read_data_item(self, data_item):
+    def _read_data_item(self, data_item):
         import h5py
 
         dims = [int(d) for d in data_item.attrib["Dimensions"].split()]
@@ -102,6 +102,18 @@ class XdmfReader(object):
         # `[()]` gives a numpy.ndarray
         return f[()]
 
+    def read_information(self, c_data):
+        from lxml import etree as ET
+
+        field_data = {}
+        root = ET.fromstring(c_data)
+        for child in root:
+            str_tag = child.attrib["key"]
+            dim = int(child.attrib["dim"])
+            num_tag = int(child.text)
+            field_data[str_tag] = numpy.array([num_tag, dim])
+        return field_data
+
     def read_xdmf2(self, root):
         domains = list(root)
         assert len(domains) == 1
@@ -130,7 +142,7 @@ class XdmfReader(object):
                 data_items = list(c)
                 assert len(data_items) == 1
                 meshio_type = xdmf_to_meshio_type[c.attrib["TopologyType"]]
-                cells[meshio_type] = self.read_data_item(data_items[0])
+                cells[meshio_type] = self._read_data_item(data_items[0])
 
             elif c.tag == "Geometry":
                 try:
@@ -140,7 +152,12 @@ class XdmfReader(object):
                     pass
                 data_items = list(c)
                 assert len(data_items) == 1
-                points = self.read_data_item(data_items[0])
+                points = self._read_data_item(data_items[0])
+
+            elif c.tag == "Information":
+                c_data = c.text
+                assert c_data
+                field_data = self.read_information(c_data)
 
             else:
                 assert c.tag == "Attribute", "Unknown section '{}'.".format(c.tag)
@@ -151,7 +168,7 @@ class XdmfReader(object):
                 data_items = list(c)
                 assert len(data_items) == 1
 
-                data = self.read_data_item(data_items[0])
+                data = self._read_data_item(data_items[0])
 
                 name = c.attrib["Name"]
                 if c.attrib["Center"] == "Node":
@@ -195,7 +212,7 @@ class XdmfReader(object):
                 assert len(data_items) == 1
                 data_item = data_items[0]
 
-                data = self.read_data_item(data_item)
+                data = self._read_data_item(data_item)
 
                 # The XDMF2 key is `TopologyType`, just `Type` for XDMF3.
                 # Allow both.
@@ -222,7 +239,12 @@ class XdmfReader(object):
                 data_items = list(c)
                 assert len(data_items) == 1
                 data_item = data_items[0]
-                points = self.read_data_item(data_item)
+                points = self._read_data_item(data_item)
+
+            elif c.tag == "Information":
+                c_data = c.text
+                assert c_data
+                field_data = self.read_information(c_data)
 
             else:
                 assert c.tag == "Attribute", "Unknown section '{}'.".format(c.tag)
@@ -235,7 +257,7 @@ class XdmfReader(object):
                 assert len(data_items) == 1
                 data_item = data_items[0]
 
-                data = self.read_data_item(data_item)
+                data = self._read_data_item(data_item)
 
                 name = c.attrib["Name"]
                 if c.attrib["Center"] == "Node":
@@ -255,7 +277,7 @@ class XdmfReader(object):
         )
 
 
-class XdmfWriter(object):
+class XdmfWriter:
     def __init__(self, filename, mesh, pretty_xml=True, data_format="HDF"):
         from lxml import etree as ET
 
@@ -278,8 +300,12 @@ class XdmfWriter(object):
 
         domain = ET.SubElement(xdmf_file, "Domain")
         grid = ET.SubElement(domain, "Grid", Name="Grid")
+        information = ET.SubElement(
+            grid, "Information", Name="Information", Value=str(len(mesh.field_data))
+        )
 
         self.points(grid, mesh.points)
+        self.field_data(mesh.field_data, information)
         self.cells(mesh.cells, grid)
         self.point_data(mesh.point_data, grid)
         self.cell_data(mesh.cell_data, grid)
@@ -458,6 +484,16 @@ class XdmfWriter(object):
                 Precision=prec,
             )
             data_item.text = self.numpy_to_xml_string(data)
+        return
+
+    def field_data(self, field_data, information):
+        from lxml import etree as ET
+
+        info = ET.Element("main")
+        for name, data in field_data.items():
+            data_item = ET.SubElement(info, "map", key=name, dim=str(data[1]))
+            data_item.text = str(data[0])
+        information.text = ET.CDATA(ET.tostring(info))
         return
 
 

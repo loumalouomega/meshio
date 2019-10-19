@@ -24,8 +24,8 @@ def _read_mesh(filename):
             continue
 
         if elem.tag == "dolfin":
-            # Don't be too strict with the assertion. Some meshe files don't
-            # have the proper tags.
+            # Don't be too strict with the assertion. Some mesh files don't have the
+            # proper tags.
             # assert elem.attrib['nsmap'] \
             #     == '{\'dolfin\': \'https://fenicsproject.org/\'}'
             pass
@@ -200,7 +200,10 @@ def write(filename, mesh):
     if "tetra" in mesh.cells:
         cell_type = "tetra"
     else:
-        assert "triangle" in mesh.cells
+        assert "triangle" in mesh.cells, (
+            "Dolfin's _legacy_ format only supports triangles or tetrahedra. "
+            "Consider using XDMF instead."
+        )
         cell_type = "triangle"
 
     _write_mesh(filename, mesh.points, cell_type, mesh.cells)

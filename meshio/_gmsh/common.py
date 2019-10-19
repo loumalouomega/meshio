@@ -155,7 +155,7 @@ def _write_physical_names(fh, field_data):
     return
 
 
-def _write_data(fh, tag, name, data, write_binary):
+def _write_data(fh, tag, name, data, binary):
     fh.write("${}\n".format(tag).encode("utf-8"))
     # <http://gmsh.info/doc/texinfo/gmsh.html>:
     # > Number of string tags.
@@ -188,8 +188,11 @@ def _write_data(fh, tag, name, data, write_binary):
     # num data items
     fh.write("{}\n".format(data.shape[0]).encode("utf-8"))
     # actually write the data
-    if write_binary:
-        dtype = [("index", c_int), ("data", c_double, num_components)]
+    if binary:
+        if num_components == 1:
+            dtype = [("index", c_int), ("data", c_double)]
+        else:
+            dtype = [("index", c_int), ("data", c_double, num_components)]
         tmp = numpy.empty(len(data), dtype=dtype)
         tmp["index"] = 1 + numpy.arange(len(data))
         tmp["data"] = data

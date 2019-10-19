@@ -1,3 +1,4 @@
+import os
 from functools import partial
 
 import numpy
@@ -28,10 +29,10 @@ test_set = [
 
 
 @pytest.mark.parametrize("mesh", test_set)
-@pytest.mark.parametrize("write_binary", [True, False])
-def test(mesh, write_binary):
+@pytest.mark.parametrize("binary", [True, False])
+def test(mesh, binary):
     def writer(*args, **kwargs):
-        return meshio._vtk.write(*args, write_binary=write_binary, **kwargs)
+        return meshio._vtk.write(*args, binary=binary, **kwargs)
 
     helpers.write_read(writer, meshio._vtk.read, mesh, 1.0e-15)
     return
@@ -45,48 +46,38 @@ def test_generic_io():
 
 
 @pytest.mark.parametrize(
-    "filename, md5, ref_sum, ref_num_cells",
-    [("vtk/rbc_001.vtk", "19f431dcb07971d5f29de33d6bbed79a", 0.00031280518, 996)],
+    "filename, ref_sum, ref_num_cells", [("rbc_001.vtk", 0.00031280518, 996)]
 )
-@pytest.mark.parametrize("write_binary", [False, True])
-def test_reference_file(filename, md5, ref_sum, ref_num_cells, write_binary):
-    filename = helpers.download(filename, md5)
+@pytest.mark.parametrize("binary", [False, True])
+def test_reference_file(filename, ref_sum, ref_num_cells, binary):
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    filename = os.path.join(this_dir, "meshes", "vtk", filename)
 
     mesh = meshio.read(filename)
     tol = 1.0e-2
     s = numpy.sum(mesh.points)
     assert abs(s - ref_sum) < tol * ref_sum
     assert len(mesh.cells["triangle"]) == ref_num_cells
-    writer = partial(meshio._vtk.write, write_binary=write_binary)
+    writer = partial(meshio._vtk.write, binary=binary)
     helpers.write_read(writer, meshio._vtk.read, mesh, 1.0e-15)
     return
 
 
 @pytest.mark.parametrize(
-    "filename, md5, ref_cells, ref_num_cells, ref_num_pnt",
+    "filename, ref_cells, ref_num_cells, ref_num_pnt",
     [
-        ("vtk/00_image.vtk", "2c800ca9734fe92172d9693f0e58fe8f", "quad", 81, 100),
-        ("vtk/01_image.vtk", "3981abae840ef521121bf8829252ae04", "hexahedron", 72, 147),
-        (
-            "vtk/02_structured.vtk",
-            "0a958a46b7629149abb03e4af47b7d29",
-            "hexahedron",
-            72,
-            147,
-        ),
-        (
-            "vtk/03_rectilinear.vtk",
-            "7b5c057940e61e88a933f7a63e99aae0",
-            "hexahedron",
-            72,
-            147,
-        ),
-        ("vtk/04_rectilinear.vtk", "f75ddbebb907fdd73159bfcfc46fdbd5", "quad", 27, 40),
-        ("vtk/05_rectilinear.vtk", "9f9bbccb7d76277b457162c0a2d3f9e9", "quad", 27, 40),
+        ("00_image.vtk", "quad", 81, 100),
+        ("01_image.vtk", "hexahedron", 72, 147),
+        ("02_structured.vtk", "hexahedron", 72, 147),
+        ("03_rectilinear.vtk", "hexahedron", 72, 147),
+        ("04_rectilinear.vtk", "quad", 27, 40),
+        ("05_rectilinear.vtk", "quad", 27, 40),
     ],
 )
-def test_structured(filename, md5, ref_cells, ref_num_cells, ref_num_pnt):
-    filename = helpers.download(filename, md5)
+def test_structured(filename, ref_cells, ref_num_cells, ref_num_pnt):
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    filename = os.path.join(this_dir, "meshes", "vtk", filename)
+
     mesh = meshio.read(filename)
     assert len(mesh.cells) == 1
     assert ref_cells in mesh.cells
@@ -95,4 +86,4 @@ def test_structured(filename, md5, ref_cells, ref_num_cells, ref_num_pnt):
 
 
 if __name__ == "__main__":
-    test(helpers.tri_mesh, write_binary=True)
+    test(helpers.tri_mesh, binary=True)

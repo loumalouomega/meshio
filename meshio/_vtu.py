@@ -13,11 +13,6 @@ from ._common import num_nodes_per_cell, write_xml
 from ._mesh import Mesh
 from ._vtk import meshio_to_vtk_type, raw_from_cell_data, vtk_to_meshio_type
 
-try:
-    from StringIO import cStringIO as BytesIO
-except ImportError:
-    from io import BytesIO
-
 
 def num_bytes_to_num_base64_chars(num_bytes):
     # Rounding up in integer division works by double negation since Python
@@ -29,21 +24,15 @@ def _cells_from_data(connectivity, offsets, types, cell_data_raw):
     # Translate it into the cells dictionary.
     # `connectivity` is a one-dimensional vector with
     # (p0, p1, ... ,pk, p10, p11, ..., p1k, ...
-
-    # Collect types into bins.
-    # See <https://stackoverflow.com/q/47310359/353337> for better
-    # alternatives.
-    uniques = numpy.unique(types)
-    bins = {u: numpy.where(types == u)[0] for u in uniques}
-
     assert len(offsets) == len(types)
 
     cells = {}
     cell_data = {}
-    for tpe, b in bins.items():
-        meshio_type = vtk_to_meshio_type[tpe]
+    for vtk_type in numpy.unique(types):
+        meshio_type = vtk_to_meshio_type[vtk_type]
         n = num_nodes_per_cell[meshio_type]
         # The offsets point to the _end_ of the indices
+        b = types == vtk_type
         indices = numpy.add.outer(offsets[b], numpy.arange(-n, 0, dtype=offsets.dtype))
         cells[meshio_type] = connectivity[indices]
         cell_data[meshio_type] = {key: value[b] for key, value in cell_data_raw.items()}
@@ -117,10 +106,10 @@ vtu_to_numpy_type = {
 numpy_to_vtu_type = {v: k for k, v in vtu_to_numpy_type.items()}
 
 
-class VtuReader(object):
-    """Helper class for reading VTU files. Some properties are global to the
-    file (e.g., byte_order), and instead of passing around these parameters,
-    make them properties of this class.
+class VtuReader:
+    """Helper class for reading VTU files. Some properties are global to the file (e.g.,
+    byte_order), and instead of passing around these parameters, make them properties of
+    this class.
     """
 
     def __init__(self, filename):
@@ -268,6 +257,10 @@ class VtuReader(object):
     def read_binary(self, data, data_type):
         # first read the the block size; it determines the size of the header
         dtype = vtu_to_numpy_type[self.header_type]
+        if self.byte_order is not None:
+            dtype = dtype.newbyteorder(
+                "<" if self.byte_order == "LittleEndian" else ">"
+            )
         num_bytes_per_item = numpy.dtype(dtype).itemsize
         num_chars = num_bytes_to_num_base64_chars(num_bytes_per_item)
         byte_string = base64.b64decode(data[:num_chars])[:num_bytes_per_item]
@@ -288,6 +281,10 @@ class VtuReader(object):
         # Read the block data
         byte_array = base64.b64decode(data[num_header_chars:])
         dtype = vtu_to_numpy_type[data_type]
+        if self.byte_order is not None:
+            dtype = dtype.newbyteorder(
+                "<" if self.byte_order == "LittleEndian" else ">"
+            )
         num_bytes_per_item = numpy.dtype(dtype).itemsize
 
         byte_offsets = numpy.empty(block_sizes.shape[0] + 1, dtype=block_sizes.dtype)
@@ -340,18 +337,16 @@ def read(filename):
 
 
 def _chunk_it(array, n):
-    out = []
     k = 0
     while k * n < len(array):
-        out.append(array[k * n : (k + 1) * n])
+        yield array[k * n : (k + 1) * n]
         k += 1
-    return out
 
 
-def write(filename, mesh, write_binary=True, pretty_xml=True):
+def write(filename, mesh, binary=True, pretty_xml=True):
     from lxml import etree as ET
 
-    if not write_binary:
+    if not binary:
         logging.warning("VTU ASCII files are only meant for debugging.")
 
     if mesh.points.shape[1] == 2:
@@ -369,8 +364,8 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
         "VTKFile",
         type="UnstructuredGrid",
         version="0.1",
-        # Use the native endianness. Not strictly necessary, but this
-        # simplifies things a bit.
+        # Use the native endianness. Not strictly necessary, but this simplifies things
+        # a bit.
         byte_order=("LittleEndian" if sys.byteorder == "little" else "BigEndian"),
         header_type=header_type,
         compressor="vtkZLibDataCompressor",
@@ -380,13 +375,13 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
     # Don't use byteswap to make sure that the dtype is changed; see
     # <https://github.com/numpy/numpy/issues/10372>.
     points = mesh.points.astype(mesh.points.dtype.newbyteorder("="))
-    for data in mesh.point_data.values():
-        data = data.astype(data.dtype.newbyteorder("="))
+    for key, data in mesh.point_data.items():
+        mesh.point_data[key] = data.astype(data.dtype.newbyteorder("="))
     for data in mesh.cell_data.values():
-        for dat in data.values():
-            dat = dat.astype(dat.dtype.newbyteorder("="))
-    for data in mesh.field_data.values():
-        data = data.astype(data.dtype.newbyteorder("="))
+        for key, dat in data.items():
+            data[key] = dat.astype(dat.dtype.newbyteorder("="))
+    for key, data in mesh.field_data.items():
+        mesh.field_data[key] = data.astype(data.dtype.newbyteorder("="))
 
     def numpy_to_xml_array(parent, name, fmt, data):
         da = ET.SubElement(
@@ -394,15 +389,21 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
         )
         if len(data.shape) == 2:
             da.set("NumberOfComponents", "{}".format(data.shape[1]))
-        if write_binary:
+        if binary:
             da.set("format", "binary")
             max_block_size = 32768
             data_bytes = data.tostring()
-            blocks = _chunk_it(data_bytes, max_block_size)
-            num_blocks = len(blocks)
-            last_block_size = len(blocks[-1])
 
-            compressed_blocks = [zlib.compress(block) for block in blocks]
+            # round up
+            num_blocks = -int(-len(data_bytes) // max_block_size)
+            last_block_size = len(data_bytes) - (num_blocks - 1) * max_block_size
+
+            compressed_blocks = [
+                # This zlib.compress is the slowest part of the writer
+                zlib.compress(block)
+                for block in _chunk_it(data_bytes, max_block_size)
+            ]
+
             # collect header
             header = numpy.array(
                 [num_blocks, max_block_size, last_block_size]
@@ -415,9 +416,8 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
             ).decode()
         else:
             da.set("format", "ascii")
-            s = BytesIO()
-            numpy.savetxt(s, data.flatten(), fmt)
-            da.text = s.getvalue().decode()
+            # This join() operations is the bottleneck for the write
+            da.text = "\n".join(map(fmt.format, data.reshape(-1)))
         return
 
     comment = ET.Comment("This file was created by meshio v{}".format(__version__))
@@ -436,15 +436,14 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
     # points
     if points is not None:
         pts = ET.SubElement(piece, "Points")
-        numpy_to_xml_array(pts, "Points", "%.11e", points)
+        numpy_to_xml_array(pts, "Points", "{:.11e}", points)
 
     if mesh.cells is not None:
         cls = ET.SubElement(piece, "Cells")
 
         # create connectivity, offset, type arrays
-        connectivity = numpy.concatenate(
-            [numpy.concatenate(v) for v in mesh.cells.values()]
-        )
+        connectivity = numpy.concatenate([v.reshape(-1) for v in mesh.cells.values()])
+
         # offset (points to the first element of the next cell)
         offsets = [
             v.shape[1] * numpy.arange(1, v.shape[0] + 1) for v in mesh.cells.values()
@@ -457,19 +456,19 @@ def write(filename, mesh, write_binary=True, pretty_xml=True):
             [numpy.full(len(v), meshio_to_vtk_type[k]) for k, v in mesh.cells.items()]
         )
 
-        numpy_to_xml_array(cls, "connectivity", "%d", connectivity)
-        numpy_to_xml_array(cls, "offsets", "%d", offsets)
-        numpy_to_xml_array(cls, "types", "%d", types)
+        numpy_to_xml_array(cls, "connectivity", "{:d}", connectivity)
+        numpy_to_xml_array(cls, "offsets", "{:d}", offsets)
+        numpy_to_xml_array(cls, "types", "{:d}", types)
 
     if mesh.point_data:
         pd = ET.SubElement(piece, "PointData")
         for name, data in mesh.point_data.items():
-            numpy_to_xml_array(pd, name, "%.11e", data)
+            numpy_to_xml_array(pd, name, "{:.11e}", data)
 
     if mesh.cell_data:
         cd = ET.SubElement(piece, "CellData")
         for name, data in raw_from_cell_data(mesh.cell_data).items():
-            numpy_to_xml_array(cd, name, "%.11e", data)
+            numpy_to_xml_array(cd, name, "{:.11e}", data)
 
     write_xml(filename, vtk_file, pretty_xml)
     return
