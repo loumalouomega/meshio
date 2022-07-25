@@ -372,70 +372,92 @@ def _write_nodes(fh, points, float_fmt, binary=False):
     fh.write(b"End Nodes\n\n")
 
 
-def _compute_blocks_offset(cells, dimension):
-    """Computes the id offset for the different blocks of entities.
-    (i.e. Elements and Conditions), as mdpa format requires a continuous
-    numbering between blocks of Elements, and another for Conditions.
-    The criteria used here is that the highest dimension entities are
-    considered 'Elements', and entities with lower dimension are 'Conditions',
-    where boundary conditions are applied."""
+# def _compute_blocks_offset(cells, dimension):
+#    """Computes the id offset for the different blocks of entities.
+#    (i.e. Elements and Conditions), as mdpa format requires a continuous
+#    numbering between blocks of Elements, and another for Conditions.
+#    The criteria used here is that the highest dimension entities are
+#    considered 'Elements', and entities with lower dimension are 'Conditions',
+#    where boundary conditions are applied."""
+#
+#    offset = {"Elements": [0], "Conditions": [0]}
+#    for ic, c in enumerate(cells):
+#        offset["Elements"].append(offset["Elements"][ic])
+#        offset["Conditions"].append(offset["Conditions"][ic])
+#        entity = "Conditions" if c.dim < dimension else "Elements"
+#        offset[entity][-1] += len(c.data)
+#    return offset
 
-    offset = {"Elements": [0], "Conditions": [0]}
-    for ic, c in enumerate(cells):
-        offset["Elements"].append(offset["Elements"][ic])
-        offset["Conditions"].append(offset["Conditions"][ic])
-        entity = "Conditions" if c.dim < dimension else "Elements"
-        offset[entity][-1] += len(c.data)
-    return offset
+
+def _compute_blocks_name(mesh):
+    """add doc"""
+
+    dim = max([v[1] for v in mesh.field_data.values()])
+    pid_to_pname = {v[0]: k for k, v in mesh.field_data.items()}
+    bname = []
+    for ib, b in enumerate(mesh.cell_data["gmsh:physical"]):
+        pid = b[0]  # assuming whole block belongs to one part, pick first
+        pname = pid_to_pname[pid]
+        pdim = mesh.field_data[pname][1]
+        entity = "Elements" if pdim == dim else "Conditions"
+        bname.append({"part_name": pname, "entity": entity})
+    return bname
 
 
-def _write_elements_and_conditions(fh, cells, binary=False, dimension=3):
-    if binary:
-        raise WriteError("Can only write ASCII")
-
-    offset = _compute_blocks_offset(cells, dimension)
-    for ib, b in enumerate(cells):
-        entity = "Conditions" if b.dim < dimension else "Elements"
+def _write_elements_and_conditions(
+    fh,
+    mesh,
+):
+    """assuming gmsh saved only physical groups, so every block belongs to a part.
+    id for the block is ilmited to 6 places, so max 10^6 elems per block
+    """
+    bname = _compute_blocks_name(mesh)
+    for ib, b in enumerate(mesh.cells):
+        entity = bname[ib]["entity"]
         type = _meshio_to_mdpa_type[b.type]
 
         # Write block
-        fh.write(f"Begin {entity} {type}\n".encode())
+        line = f"Begin {entity} {type}"
+        line += f"  // GUI group identifier: {bname[ib]['part_name']}"
+        line += f"\n"
+        fh.write(line.encode())
         for ie, pe0 in enumerate(b.data):
-            line = f"  {offset[entity][ib] + ie + 1} 0 "
-            line += " ".join([str(x + 1) for x in pe0])
+            eid = f"{ib + 1:4}{int(ie) + 1:06}"  # TODO: improve "hash" function
+            line = f"{eid} 0 "
+            line += "".join([f"{x + 1:8}" for x in pe0])
             line += "\n"
             fh.write(line.encode())
         fh.write(f"End {entity}\n\n".encode())
 
 
-def _write_submodelparts(fh, mesh, binary=False, dimension=3):
+def _write_submodelparts(
+    fh,
+    mesh,
+):
     """Writes meshio cell sets as mdpa submodelparts"""
 
-    if binary:
-        raise WriteError("Can only write ASCII")
-
-    offset = _compute_blocks_offset(mesh.cells, dimension)
+    bname = _compute_blocks_name(mesh)
     for part_name, part_blocks in mesh.cell_sets.items():
         if "gmsh:bounding_entities" in part_name:
             continue
         part_data = {"Nodes": set(), "Elements": [], "Conditions": []}
-        for i, block in enumerate(part_blocks):
-            if not block.size:
-                continue
-            is_condition = mesh.cells[i].dim < dimension
-            subentity = "Conditions" if is_condition else "Elements"
-            aux = []
-            for c in block:
-                part_data["Nodes"].update(mesh.cells[i].data[c])
-                aux.append(int(c))
-            part_data[subentity].extend([x + offset[subentity][i] for x in aux])
+        blocks_of_part = np.array([b.size for b in part_blocks]).nonzero()[0]
+        for ib in blocks_of_part:
+            # nodes
+            for p in mesh.cells[ib].data:
+                part_data["Nodes"].update(p)
+            # elements and conditions
+            subentity = bname[ib]["entity"]
+            for ie in part_blocks[ib]:
+                eid = int(f"{ib + 1}{int(ie):06}")  # TODO: improve "hash" function
+                part_data[subentity].append(eid)
 
         # Write submodelpart
         fh.write(f"Begin SubModelPart {part_name}\n".encode())
         for k, v in part_data.items():
             fh.write(f"    Begin SubModelPart{k}\n".encode())
             for i in sorted(v):
-                fh.write(f"        {i + 1}\n".encode())
+                fh.write(f"        {i+1}\n".encode())
             fh.write(f"    End SubModelPart{k}\n".encode())
         fh.write(f"End SubModelPart\n\n".encode())
 
@@ -537,19 +559,24 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
             else:
                 other_data[key] = data
 
-        # identify dimension of the mesh
-        mesh_dim = -1
-        for c in cells:
-            mesh_dim = c.dim if c.dim > mesh_dim else mesh_dim
-
         # identify entities
-        _write_nodes(fh, points, float_fmt, binary)
-        _write_elements_and_conditions(fh, cells, binary, mesh_dim)
-        _write_submodelparts(fh, mesh, binary, mesh_dim)
-        #for name, dat in mesh.point_data.items():
+        _write_nodes(
+            fh,
+            points,
+            float_fmt,
+        )
+        _write_elements_and_conditions(
+            fh,
+            mesh,
+        )
+        _write_submodelparts(
+            fh,
+            mesh,
+        )
+        # for name, dat in mesh.point_data.items():
         #    _write_data(fh, "NodalData", name, dat, binary)
-        #cell_data_raw = raw_from_cell_data(other_data)
-        #for name, dat in cell_data_raw.items():
+        # cell_data_raw = raw_from_cell_data(other_data)
+        # for name, dat in cell_data_raw.items():
         #    # assume always that the components are elements (for now)
         #    _write_data(fh, "ElementalData", name, dat, binary)
 
