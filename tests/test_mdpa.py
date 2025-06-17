@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import pathlib # Ensure pathlib is imported at the top
 
 import meshio
 
@@ -1251,3 +1252,166 @@ End SubModelPart
 """.split(
     "\n"
 )
+
+
+# Define the path to the test MDPA file for geometries
+# Assuming the tests directory is the current working directory or in python path for helpers
+GEOMETRIES_TEST_FILE = pathlib.Path(__file__).parent / "meshes" / "mdpa" / "geometries_test.mdpa"
+
+def test_read_geometries():
+    """Test reading a .mdpa file with Geometries blocks."""
+    mesh = meshio.read(GEOMETRIES_TEST_FILE)
+
+    assert hasattr(mesh, 'geometries_block'), "Mesh object should have 'geometries_block' attribute."
+    assert mesh.geometries_block is not None, "'geometries_block' should not be None."
+    assert len(mesh.geometries_block) == 2, "Expected 2 CellBlocks in geometries_block."
+
+    # Check Triangle2D3 block
+    tri_block = None
+    for block in mesh.geometries_block:
+        if block.type == "triangle":
+            tri_block = block
+            break
+    assert tri_block is not None, "Triangle geometry block not found."
+    expected_tri_data = np.array([[0, 1, 2], [0, 2, 3]], dtype=int)
+    np.testing.assert_array_equal(tri_block.data, expected_tri_data)
+
+    # Check Line2D2 block
+    line_block = None
+    for block in mesh.geometries_block:
+        if block.type == "line":
+            line_block = block
+            break
+    assert line_block is not None, "Line geometry block not found."
+    expected_line_data = np.array([[0, 1], [1, 4]], dtype=int)
+    np.testing.assert_array_equal(line_block.data, expected_line_data)
+
+    # Verify mdpa_geometry_ids_info
+    assert "mdpa_geometry_ids_info" in mesh.misc_data
+    geom_ids_info = mesh.misc_data["mdpa_geometry_ids_info"]
+    # Convert to set of tuples for easier comparison if order is not guaranteed
+    geom_ids_info_set = set(geom_ids_info)
+
+    expected_ids_info = {
+        (101, "triangle", 0),
+        (102, "triangle", 1),
+        (201, "line", 0),
+        (205, "line", 1),
+    }
+    assert geom_ids_info_set == expected_ids_info, \
+        f"Mismatch in mdpa_geometry_ids_info. Got {geom_ids_info_set}, expected {expected_ids_info}"
+
+    # Also check regular elements to ensure they are still read correctly
+    assert len(mesh.cells) == 1
+    assert mesh.cells[0].type == "triangle"
+    assert len(mesh.cells[0].data) == 1
+
+
+def test_write_geometries_roundtrip():
+    """Test writing and reading back a .mdpa file with Geometries blocks."""
+    mesh1 = meshio.read(GEOMETRIES_TEST_FILE)
+
+    # Use helpers.write_read for roundtrip
+    # Need to pass extension explicitly for mdpa
+    mesh2 = helpers.write_read(mesh1, meshio.mdpa.write, meshio.mdpa.read, extension=".mdpa")
+
+    assert hasattr(mesh2, 'geometries_block') and mesh2.geometries_block is not None
+    assert len(mesh1.geometries_block) == len(mesh2.geometries_block)
+
+    # Sort blocks by type for comparison, as order might change
+    mesh1_geoms_sorted = sorted(mesh1.geometries_block, key=lambda b: b.type)
+    mesh2_geoms_sorted = sorted(mesh2.geometries_block, key=lambda b: b.type)
+
+    for block1, block2 in zip(mesh1_geoms_sorted, mesh2_geoms_sorted):
+        assert block1.type == block2.type
+        np.testing.assert_array_equal(block1.data, block2.data)
+
+    # Verify mdpa_geometry_ids_info for roundtrip
+    # The reader stores it, the writer uses it. The second read should repopulate it.
+    assert "mdpa_geometry_ids_info" in mesh2.misc_data
+    # Order should be preserved by the current reader/writer logic based on how blocks are processed
+    # If this fails due to order, convert to sets for comparison.
+    assert sorted(mesh1.misc_data["mdpa_geometry_ids_info"]) == sorted(mesh2.misc_data["mdpa_geometry_ids_info"])
+
+
+def test_write_manual_geometries(tmp_path):
+    """Test writing manually created geometries to a .mdpa file."""
+    points = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [2.0, 1.0, 0.0] # Extra node for a line
+    ], dtype=float)
+
+    # Case 1: No explicit IDs provided, writer should assign sequentially
+    geometries1 = [
+        meshio.CellBlock("triangle", np.array([[0, 1, 2]])),
+        meshio.CellBlock("line", np.array([[0, 3], [1,4]]))
+    ]
+    mesh1 = meshio.Mesh(points, [], geometries_block=geometries1)
+
+    # Use a unique filename for this sub-test to avoid interference if run in parallel or reused tmp_path
+    file1_path = tmp_path / "manual_geoms_sequential_ids.mdpa"
+    meshio.mdpa.write(file1_path, mesh1)
+    mesh1_readback = meshio.mdpa.read(file1_path)
+
+    assert hasattr(mesh1_readback, 'geometries_block') and mesh1_readback.geometries_block is not None
+    assert len(mesh1_readback.geometries_block) == 2
+
+    # Sort blocks by type for comparison
+    m1rb_geoms_sorted = sorted(mesh1_readback.geometries_block, key=lambda b: b.type)
+
+    assert m1rb_geoms_sorted[0].type == "line" # line comes before triangle alphabetically
+    np.testing.assert_array_equal(m1rb_geoms_sorted[0].data, np.array([[0,3],[1,4]]))
+    assert m1rb_geoms_sorted[1].type == "triangle"
+    np.testing.assert_array_equal(m1rb_geoms_sorted[1].data, np.array([[0,1,2]]))
+
+    # Check assigned IDs (should be sequential as no info was provided)
+    # The writer warns about missing IDs and assigns them. Reader populates from file.
+    # Expected: (1, "triangle", 0), (1, "line", 0), (2, "line", 1) if blocks are written one by one with new counters
+    # Or: (1, "triangle",0), (2, "line",0), (3, "line",1) if counter is global across Begin/End Geometries blocks
+    # The current writer uses a global_geometry_id_counter that increments.
+    # Order of blocks in mesh.geometries_block: triangle, then line.
+    # So, triangle ID 1. Line IDs 2, 3.
+    expected_ids_info1 = {
+        (1, "triangle", 0), # First geometry entity overall
+        (2, "line", 0),     # Second geometry entity overall
+        (3, "line", 1)      # Third geometry entity overall
+    }
+    assert "mdpa_geometry_ids_info" in mesh1_readback.misc_data
+    assert set(mesh1_readback.misc_data["mdpa_geometry_ids_info"]) == expected_ids_info1
+
+
+    # Case 2: Explicit IDs provided via misc_data
+    geometries2 = [
+        meshio.CellBlock("quad", np.array([[0,1,2,3]])),
+        meshio.CellBlock("vertex", np.array([[4]]))
+    ]
+    # Note: MDPA types Point2D/Point3D map to 'vertex'. Ensure _meshio_to_mdpa_type has 'vertex'.
+    # It does: "Point2D": "vertex", "Point3D": "vertex"
+    # And _meshio_to_mdpa_type has "vertex": "Point3D" (or "Point2D" depending on dict creation order)
+
+    manual_ids_info = [
+        (55, "quad", 0),
+        (77, "vertex", 0)
+    ]
+    mesh2 = meshio.Mesh(points, [], geometries_block=geometries2, misc_data={"mdpa_geometry_ids_info": manual_ids_info})
+
+    file2_path = tmp_path / "manual_geoms_explicit_ids.mdpa"
+    meshio.mdpa.write(file2_path, mesh2)
+    mesh2_readback = meshio.mdpa.read(file2_path)
+
+    assert hasattr(mesh2_readback, 'geometries_block') and mesh2_readback.geometries_block is not None
+    # Order of blocks might depend on internal dict iteration if not sorted before writing cellblocks.
+    # The writer iterates mesh.geometries_block as provided.
+
+    m2rb_geoms_sorted = sorted(mesh2_readback.geometries_block, key=lambda b: b.type)
+
+    assert m2rb_geoms_sorted[0].type == "quad"
+    np.testing.assert_array_equal(m2rb_geoms_sorted[0].data, np.array([[0,1,2,3]]))
+    assert m2rb_geoms_sorted[1].type == "vertex"
+    np.testing.assert_array_equal(m2rb_geoms_sorted[1].data, np.array([[4]]))
+
+    assert "mdpa_geometry_ids_info" in mesh2_readback.misc_data
+    assert set(mesh2_readback.misc_data["mdpa_geometry_ids_info"]) == set(manual_ids_info)
