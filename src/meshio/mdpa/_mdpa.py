@@ -1,6 +1,6 @@
 """
 I/O for KratosMultiphysics's mdpa format, cf.
-<https://github.com/KratosMultiphysics/Kratos/wiki/Input-data>.
+<https://kratosmultiphysics.github.io/Kratos/pages/Kratos/For_Developers/IO/Input-data.html>.
 
 The MDPA format is unsuitable for fast consumption, this is why:
 <https://github.com/KratosMultiphysics/Kratos/issues/5365>.
