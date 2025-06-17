@@ -248,6 +248,70 @@ def _read_cells(f, cells_list, is_ascii, cell_tags_dict, environ, mdpa_element_i
         if line_at_end.strip() == other_end_statement: raise ReadError(f"Unexpected '{line_at_end.strip()}' found. Was expecting '{expected_end_statement}' for block {environ}")
         raise ReadError(f"Expected '{expected_end_statement}', got '{line_at_end.strip()}' for block {environ}")
 
+def _read_geometries(f, geometries_list, is_ascii, geometry_tags_dict, environ, mdpa_geometry_ids_info):
+    if not is_ascii: raise ReadError("Can only read ASCII geometries")
+    meshio_geometry_type = None
+    if environ is not None:
+        cleaned_environ_header = environ.split("//",1)[0].strip()
+        # Expected format: "Begin Geometries geometry_name"
+        parts = cleaned_environ_header.split()
+        if len(parts) >= 3:
+            geometry_name_mdpa = " ".join(parts[2:])
+            # Attempt to find a direct match for geometry_name_mdpa
+            if geometry_name_mdpa in _mdpa_to_meshio_type:
+                meshio_geometry_type = _mdpa_to_meshio_type[geometry_name_mdpa]
+            else:
+                # Fallback: check if any known MDPA type is a substring
+                for k_mdpa, v_meshio in _mdpa_to_meshio_type.items():
+                    if k_mdpa in geometry_name_mdpa:
+                        meshio_geometry_type = v_meshio
+                        break
+            # If still None, it might be determined per-line based on node count, or raise error later
+        else:
+            warn(f"Malformed 'Begin Geometries' header: {environ}. Type may be inferred from node count.")
+
+    line_at_end = ""
+    while True:
+        line_raw = f.readline().decode()
+        if not line_raw: warn(f"EOF encountered while expecting {environ} content or End Geometries statement."); break
+        stripped_line = line_raw.strip()
+        if stripped_line.startswith("End Geometries"): line_at_end = stripped_line; break
+        if not stripped_line or stripped_line.startswith("//"): continue
+        line_content = stripped_line.split("//", 1)[0].strip()
+        if not line_content: continue
+        try: parts = [int(p) for p in filter(None, line_content.split())]
+        except ValueError: warn(f"Skipping line with non-integer parts in {environ}: {line_content}"); continue
+
+        # Format: id n1 n2 n3 ... (no property_id)
+        if not parts or len(parts) < 2: warn(f"Skipping malformed entity line in {environ} (ID + at least one node expected): {line_content}"); continue
+        original_id, node_ids_1_based = parts[0], parts[1:]
+
+        num_nodes_this_geometry = len(node_ids_1_based)
+        current_meshio_type = meshio_geometry_type # Use type from header if available
+
+        if current_meshio_type is None: # Try to infer from node count if not in header
+            try: current_meshio_type = inverse_num_nodes_per_cell[num_nodes_this_geometry]
+            except KeyError: raise ReadError(f"Unknown geometry type with {num_nodes_this_geometry} nodes in {environ} (and type not in header): {line_content}")
+
+        if not geometries_list or current_meshio_type != geometries_list[-1][0]:
+            geometries_list.append((current_meshio_type, []))
+
+        geometries_list[-1][1].append(np.array(node_ids_1_based) - 1)
+        local_idx = len(geometries_list[-1][1]) - 1
+        mdpa_geometry_ids_info.append((original_id, current_meshio_type, local_idx))
+
+        # geometry_tags_dict is not populated for now, but kept for signature consistency
+        # if current_meshio_type not in geometry_tags_dict: geometry_tags_dict[current_meshio_type] = []
+        # geometry_tags_dict[current_meshio_type].append([]) # No property/tag ID for geometries
+
+    expected_end_statement = "End Geometries"
+    if line_at_end.strip() != expected_end_statement:
+        # Check if it's an unexpected end statement from another block type
+        if line_at_end.strip() in ["End Elements", "End Conditions"]:
+            raise ReadError(f"Unexpected '{line_at_end.strip()}' found. Was expecting '{expected_end_statement}' for block {environ}")
+        # General error for mismatch or premature EOF
+        raise ReadError(f"Expected '{expected_end_statement}', got '{line_at_end.strip() if line_at_end else 'EOF'}' for block {environ}")
+
 def _prepare_cells(cells_list_of_tuples, cell_tags_dict):
     has_additional_tag_data = False; output_cell_tags_meshio = {}
     for cell_type_str, tags_list_of_lists in cell_tags_dict.items():
@@ -310,6 +374,8 @@ def read_buffer(f):
     """
     points = []; cells_list_of_tuples = []; field_data = {}; cell_data_parsed_blocks = {}
     cell_tags_temp = {}; point_data = {}; mdpa_element_ids_info = []; mdpa_condition_ids_info = []
+    mdpa_geometry_ids_info = []  # Initialize mdpa_geometry_ids_info
+    geometries_list_of_tuples = []  # Initialize geometries_list_of_tuples
     misc_data = {}; active_submodelpart_stack = []; is_ascii = True
     while True:
         line_raw = f.readline().decode()
@@ -332,6 +398,16 @@ def read_buffer(f):
         elif environ.startswith("Begin Nodes"): points = _read_nodes(f, is_ascii, None)
         elif environ.startswith("Begin Elements") or environ.startswith("Begin Conditions"):
             _read_cells(f, cells_list_of_tuples, is_ascii, cell_tags_temp, environ, mdpa_element_ids_info, mdpa_condition_ids_info)
+        elif environ.startswith("Begin Geometries"):
+            # Placeholder for _read_geometries call
+            _read_geometries(
+                f,
+                geometries_list_of_tuples,
+                is_ascii,
+                {},  # empty dict for geometry_tags for now
+                environ,
+                mdpa_geometry_ids_info,
+            )
         elif environ.startswith("Begin Table"):
             actual_header_line = environ.split("//",1)[0].strip()
             parts = actual_header_line.split()
@@ -478,6 +554,13 @@ def read_buffer(f):
     misc_data["reader_element_ids_info"] = mdpa_element_ids_info
     misc_data["reader_condition_ids_info"] = mdpa_condition_ids_info
 
+    # if we have geometries_list_of_tuples, then we prepare them for meshio
+    if geometries_list_of_tuples:
+        # Using _prepare_cells for geometries as well, assuming similar structure
+        final_geometries_for_mesh, _, _ = _prepare_cells(geometries_list_of_tuples, {}) # No tags for geometries for now
+        mesh.geometries_block = final_geometries_for_mesh # Store as a new attribute
+        misc_data["mdpa_geometry_ids_info"] = mdpa_geometry_ids_info
+
     final_cells_for_mesh, processed_cell_tags, has_additional_tag_data = _prepare_cells(cells_list_of_tuples, cell_tags_temp)
     final_cell_data_for_mesh = {}
     all_cell_types = set(cell_data_parsed_blocks.keys()) | set(processed_cell_tags.keys())
@@ -602,6 +685,44 @@ def _write_elements_and_conditions(fh, mesh, cells_to_write):
             line += "\n"; fh.write(line.encode())
         fh.write(f"End {entity_block_type}\n\n".encode())
     return mdpa_written_entity_ids
+
+def _write_geometries(fh, geometries_to_write, mdpa_geometry_ids_info_list, float_fmt):
+    """Writes geometry blocks to the MDPA file."""
+    if not geometries_to_write:
+        return
+
+    # Build a lookup map from (meshio_type, local_idx_in_block) to original_id
+    id_lookup = {}
+    if mdpa_geometry_ids_info_list:
+        for info_tuple in mdpa_geometry_ids_info_list:
+            if len(info_tuple) == 3: # (original_id, meshio_type, local_idx)
+                original_id, meshio_type, local_idx = info_tuple
+                id_lookup[(meshio_type, local_idx)] = original_id
+            else:
+                warn(f"Skipping malformed entry in mdpa_geometry_ids_info: {info_tuple}")
+
+    global_geometry_id_counter = 1 # Fallback counter if ID not in lookup
+
+    for cell_block in geometries_to_write:
+        mdpa_type = _meshio_to_mdpa_type.get(cell_block.type)
+        if not mdpa_type:
+            warn(f"Skipping geometry block of unknown type: {cell_block.type}")
+            continue
+
+        fh.write(f"Begin Geometries {mdpa_type}\n".encode())
+        for ie, node_indices_for_cell in enumerate(cell_block.data):
+            geom_id = id_lookup.get((cell_block.type, ie))
+            if geom_id is None:
+                # Fallback: Use a sequential counter if original ID not found
+                # This might happen if geometries_block was populated manually without mdpa_geometry_ids_info
+                warn(f"Original ID for geometry type {cell_block.type}, index {ie} not found. Using sequential ID {global_geometry_id_counter}.")
+                geom_id = global_geometry_id_counter
+                global_geometry_id_counter += 1
+
+            # Node indices are 0-based in meshio, convert to 1-based for MDPA
+            node_ids_str = " ".join(map(str, np.array(node_indices_for_cell) + 1))
+            fh.write(f"  {geom_id} {node_ids_str}\n".encode())
+        fh.write(b"End Geometries\n\n")
 
 def _write_submodelparts(fh, mesh, cells_to_write, mdpa_written_entity_ids):
     if not hasattr(mesh, 'misc_data') or "submodelpart_info" not in mesh.misc_data:
@@ -774,6 +895,21 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
                         fh.write(b"End Table\n\n")
         _write_nodes(fh, points, float_fmt)
         mdpa_written_entity_ids = _write_elements_and_conditions(fh, mesh, cells_to_write)
+
+        # Write Geometries if they exist
+        if hasattr(mesh, 'geometries_block') and mesh.geometries_block:
+            mdpa_geom_ids_info = mesh.misc_data.get("mdpa_geometry_ids_info", [])
+            # Corrected: mdpa_geom_ids_info might be stored under "reader_..." key by some logic
+            if not mdpa_geom_ids_info and "reader_geometry_ids_info" in mesh.misc_data: # Hypothetical key
+                 mdpa_geom_ids_info = mesh.misc_data.get("reader_geometry_ids_info", [])
+            elif not mdpa_geom_ids_info and "mdpa_geometry_ids_info" not in mesh.misc_data:
+                 # If "mdpa_geometry_ids_info" was the one read, it should be in misc_data directly.
+                 # This check is more of a safeguard or for alternative storage patterns.
+                 pass
+
+
+            _write_geometries(fh, mesh.geometries_block, mdpa_geom_ids_info, float_fmt)
+
         if hasattr(mesh, 'point_data') and mesh.point_data:
             for name, data_array in mesh.point_data.items():
                 if name.endswith("_fixed_status") or name.startswith("gmsh:"): continue
@@ -809,6 +945,7 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
     # This is a specific behavior to satisfy the test's direct comparison logic.
     # It implies that IDs in these Mesh sub-blocks might not align with the
     # (potentially renumbered) global IDs in the main "Elements" / "Conditions" blocks of the output file.
+    # A similar consideration might apply if Geometries are ever referenced by Mesh blocks.
 
         if hasattr(mesh, 'misc_data') and mesh.misc_data and "meshes" in mesh.misc_data:
             for mesh_id, mesh_content in mesh.misc_data["meshes"].items():
