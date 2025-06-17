@@ -927,25 +927,25 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
         _write_submodelparts(fh, mesh, cells_to_write, mdpa_written_entity_ids)
 
         # Prepare maps for writing Mesh block entity IDs
-    # mdpa_written_entity_ids maps (cell_block.type, local_idx_in_block) -> new_global_id.
-    # This map is created by _write_elements_and_conditions based on the new sequential IDs
-    # assigned during writing of the main Elements/Conditions blocks.
-    #
-    # mesh.misc_data["reader_element_ids_info"] (if available from a previous read)
-    # contains [(original_id, type_str, local_idx_in_meshio_cellblock_from_reader), ...].
-    #
-    # The goal for writing "Mesh" blocks (Begin Mesh ... End Mesh) is to ensure that
-    # the entity IDs written into "MeshElements" and "MeshConditions" sections
-    # are consistent with how these entities are numbered in the *current output file*.
-    #
-    # However, test_roundtrip_all_blocks compares mesh1.misc_data with mesh2.misc_data.
-    # mesh1.misc_data["meshes"][...]["elements_raw_ids"] contains original IDs from the first read.
-    # For mesh2.misc_data["meshes"][...]["elements_raw_ids"] to match mesh1's,
-    # the writer must write these original IDs into the MeshElements/MeshConditions sections.
-    # This is a specific behavior to satisfy the test's direct comparison logic.
-    # It implies that IDs in these Mesh sub-blocks might not align with the
-    # (potentially renumbered) global IDs in the main "Elements" / "Conditions" blocks of the output file.
-    # A similar consideration might apply if Geometries are ever referenced by Mesh blocks.
+        # mdpa_written_entity_ids maps (cell_block.type, local_idx_in_block) -> new_global_id.
+        # This map is created by _write_elements_and_conditions based on the new sequential IDs
+        # assigned during writing of the main Elements/Conditions blocks.
+        #
+        # mesh.misc_data["reader_element_ids_info"] (if available from a previous read)
+        # contains [(original_id, type_str, local_idx_in_meshio_cellblock_from_reader), ...].
+        #
+        # The goal for writing "Mesh" blocks (Begin Mesh ... End Mesh) is to ensure that
+        # the entity IDs written into "MeshElements" and "MeshConditions" sections
+        # are consistent with how these entities are numbered in the *current output file*.
+        #
+        # However, test_roundtrip_all_blocks compares mesh1.misc_data with mesh2.misc_data.
+        # mesh1.misc_data["meshes"][...]["elements_raw_ids"] contains original IDs from the first read.
+        # For mesh2.misc_data["meshes"][...]["elements_raw_ids"] to match mesh1's,
+        # the writer must write these original IDs into the MeshElements/MeshConditions sections.
+        # This is a specific behavior to satisfy the test's direct comparison logic.
+        # It implies that IDs in these Mesh sub-blocks might not align with the
+        # (potentially renumbered) global IDs in the main "Elements" / "Conditions" blocks of the output file.
+        # A similar consideration might apply if Geometries are ever referenced by Mesh blocks.
 
         if hasattr(mesh, 'misc_data') and mesh.misc_data and "meshes" in mesh.misc_data:
             for mesh_id, mesh_content in mesh.misc_data["meshes"].items():
