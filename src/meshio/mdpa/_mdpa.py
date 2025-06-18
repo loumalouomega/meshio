@@ -1,9 +1,60 @@
 """
-I/O for KratosMultiphysics's mdpa format, cf.
-<https://kratosmultiphysics.github.io/Kratos/pages/Kratos/For_Developers/IO/Input-data.html>.
+I/O for KratosMultiphysics's MDPA (Mesh Data Post-processing ASCII) format.
 
-The MDPA format is unsuitable for fast consumption, this is why:
-<https://github.com/KratosMultiphysics/Kratos/issues/5365>.
+This module supports reading and writing MDPA files, which are used by the
+KratosMultiphysics framework. For detailed information on the format, see the
+Kratos documentation:
+<https://kratosmultiphysics.github.io/Kratos/pages/Kratos/For_Developers/IO/Input-data.html>
+
+Supported MDPA Blocks:
+----------------------
+The reader and writer handle the following major MDPA blocks:
+- Nodes: Nodal coordinates.
+- Elements (various types): Element connectivity and properties.
+- Conditions (various types): Condition connectivity and properties.
+- Geometries (various types): Geometric entity connectivity (typically for BREP/NURBS).
+- NodalData: Data associated with nodes (e.g., DISPLACEMENT, VELOCITY).
+- ElementalData: Data associated with elements.
+- ConditionalData: Data associated with conditions.
+- Properties: Material properties or other parameters referenced by elements/conditions.
+- Tables: Tabular data, often used within Properties blocks.
+- SubModelPart: Defines subsets of the mesh, including their own data, tables,
+  nodes, elements, and conditions.
+- Mesh: Defines coarser or alternative mesh representations, often for multi-level
+  solvers or specific analysis phases.
+
+Kratos-Specific Node Ordering:
+------------------------------
+Kratos uses a specific node ordering for some higher-order elements (e.g.,
+hexahedron20, hexahedron27). This module applies permutations during reading
+and writing to convert between Kratos ordering and meshio's standard VTK-based
+ordering to ensure compatibility.
+
+`misc_data` for Round-Trip:
+---------------------------
+MDPA-specific information that is not part of the standard meshio data model
+(e.g., original Kratos IDs for entities, SubModelPart definitions, Mesh block
+details) is stored in the `mesh.misc_data` attribute. This allows for better
+fidelity when writing an MDPA file that was previously read by this module.
+Key fields in `misc_data` include:
+- `reader_element_ids_info`: List of (original_id, type_str, local_idx) for elements.
+- `reader_condition_ids_info`: List of (original_id, type_str, local_idx) for conditions.
+- `mdpa_geometry_ids_info`: List of (original_id, type_str, local_idx) for geometries.
+- `submodelpart_info`: Dictionary holding data for SubModelParts.
+- `meshes`: Dictionary holding data for Mesh blocks.
+
+Unsupported MDPA Blocks:
+------------------------
+While this module aims to support a wide range of MDPA features, the following
+blocks defined in the MDPA specification are not currently read or written:
+- `Constraints`: This block is not processed.
+- `SubModelPartGeometries`: This block, which can appear within a
+  `Begin SubModelPart` ... `End SubModelPart` block, is not processed.
+
+Limitations:
+------------
+The MDPA format is primarily ASCII-based and can be slow to parse for very large meshes. 
+See: <https://github.com/KratosMultiphysics/Kratos/issues/5365>.
 """
 
 import numpy as np
@@ -16,6 +67,27 @@ from .._helpers import register_format
 from .._mesh import Mesh, CellBlock
 
 def _read_single_table(f, header_parts):
+    """
+    Parses a single 'Table' block from an MDPA file.
+
+    Reads data from the file object `f` until 'End Table' is encountered.
+    The table ID and variable names are extracted from `header_parts`.
+
+    Parameters
+    ----------
+    f : file-like object
+        The input file stream, positioned at the start of the table data (after the header line).
+    header_parts : list of str
+        A list of strings from the 'Begin Table' header line, split by whitespace.
+        Expected to be like ['Begin', 'Table', table_id, var1, var2, ...].
+
+    Returns
+    -------
+    dict or None
+        A dictionary containing the table's 'id', 'variables' (list of names),
+        and 'data' (NumPy array of floats). Returns None if the table is malformed
+        or empty.
+    """
     if len(header_parts) < 3:
         warn(f"Skipping malformed Table header (too few parts): {' '.join(header_parts)}")
         while True:
@@ -77,6 +149,45 @@ local_dimension_types = {
 def _parse_generic_data_block(f, block_end_str, variable_name_full,
                               entity_id_map, data_storage_target,
                               num_entities_per_type, is_nodal_data):
+    """
+    Parses generic data blocks like NodalData, ElementalData, or ConditionalData.
+
+    This function reads lines from `f` until `block_end_str` is found. Each line
+    is expected to start with an entity ID, followed by data values. For NodalData,
+    an optional "fixed" status (0 or 1) can precede the data values.
+    The parsed data is stored in `data_storage_target`.
+
+    Parameters
+    ----------
+    f : file-like object
+        Input file stream.
+    block_end_str : str
+        String marking the end of the data block (e.g., "End NodalData").
+    variable_name_full : str
+        The full variable name as read from the block header (e.g., "DISPLACEMENT[3]").
+    entity_id_map : dict
+        For Elemental/ConditionalData, maps original Kratos ID to (meshio_type_str, local_idx).
+        For NodalData, maps Kratos ID (1-based) to ("_node_", local_idx_0_based).
+    data_storage_target : dict
+        Dictionary where parsed data is stored. For NodalData, keys are variable names.
+        For Elemental/ConditionalData, keys are meshio cell types, and values are
+        dictionaries mapping variable names to data arrays.
+    num_entities_per_type : dict
+        Maps meshio_type_str (or "_node_") to the total number of entities of that type.
+        Used to initialize arrays of the correct size.
+    is_nodal_data : bool
+        True if parsing NodalData, False for ElementalData/ConditionalData.
+        This affects ID mapping and handling of the optional "fixed" status.
+
+    Notes
+    -----
+    - Data lines are parsed based on the number of components inferred from the first valid data line.
+    - For NodalData, if a "fixed" status is detected, an additional array
+      `{variable_name}_fixed_status` is populated.
+    - Malformed lines or lines with incorrect Kratos IDs are skipped with a warning.
+    - Arrays are initialized with NaNs (for float data) or zeros (for integer/flag data)
+      and filled as data is read.
+    """
     variable_name = variable_name_full.split("[",1)[0].strip()
     parsed_data_map_by_type = {}
     num_components = -1
@@ -178,12 +289,56 @@ def _parse_generic_data_block(f, block_end_str, variable_name_full,
             if variable_name not in data_storage_target[type_key_expected]: data_storage_target[type_key_expected][variable_name] = np.full(final_shape, default_fill_value, dtype=final_dtype)
 
 def read(filename):
-    """Reads a Kratos MDPA mesh file."""
+    """
+    Reads a Kratos MDPA mesh file from the given `filename`.
+
+    Parameters
+    ----------
+    filename : str
+        The path to the MDPA file to be read.
+
+    Returns
+    -------
+    Mesh
+        A meshio.Mesh object representing the data from the MDPA file.
+        MDPA-specific information, such as original entity IDs, SubModelPart
+        details, and Mesh block information, is stored in the `mesh.misc_data`
+        attribute for potential round-trip usage.
+    """
     with open_file(filename, "rb") as f: mesh = read_buffer(f)
     return mesh
 
 def _read_nodes(f, is_ascii, data_size):
-    """Helper function to read nodal coordinates from MDPA file."""
+    """
+    Reads node coordinates from a 'Nodes' block in an MDPA file.
+
+    Parses lines from the file object `f` between "Begin Nodes" and "End Nodes".
+    Each line is expected to contain node information, typically ID followed by
+    X, Y, Z coordinates. This function extracts the coordinates.
+
+    Parameters
+    ----------
+    f : file-like object
+        The input file stream, positioned at the start of the node data (after "Begin Nodes").
+    is_ascii : bool
+        Flag indicating if the format is ASCII. (Currently, only ASCII is handled).
+    data_size : int or None
+        Expected size of data type, not directly used in this ASCII implementation
+        but part of a common signature for readers.
+
+    Returns
+    -------
+    numpy.ndarray
+        A NumPy array of shape (num_nodes, 3) containing the XYZ coordinates
+        of the nodes. Returns an empty array if no nodes are found.
+
+    Raises
+    ------
+    ReadError
+        If EOF is encountered before "End Nodes" or if node coordinate data
+        is malformed (e.g., less than 3 dimensions).
+    """
+    # is_ascii and data_size are not strictly used here as only ASCII text is processed.
     pos = f.tell(); num_nodes = 0; node_lines = []
     while True:
         line_raw = f.readline().decode()
@@ -204,7 +359,40 @@ def _read_nodes(f, is_ascii, data_size):
     return points_arr
 
 def _read_cells(f, cells_list, is_ascii, cell_tags_dict, environ, mdpa_element_ids_info, mdpa_condition_ids_info):
-    if not is_ascii: raise ReadError("Can only read ASCII cells")
+    """
+    Reads element or condition connectivity from an MDPA file block.
+
+    Parses lines from `f` within an "Elements" or "Conditions" block.
+    Each line typically defines an entity: ID, PropertyID, Node1, Node2, ...
+    The function populates `cells_list` with (meshio_type, node_ids_array)
+    and `cell_tags_dict` with property IDs. It also records original Kratos IDs
+    and their mapping to meshio structure in `mdpa_element_ids_info` or
+    `mdpa_condition_ids_info`.
+
+    Parameters
+    ----------
+    f : file-like object
+        Input file stream, positioned after the block's "Begin" line.
+    cells_list : list
+        List to append (meshio_cell_type, list_of_node_arrays) tuples to.
+    is_ascii : bool
+        Indicates if the format is ASCII (always true for current implementation).
+    cell_tags_dict : dict
+        Dictionary to store property IDs, mapping meshio_cell_type to lists of [property_id].
+    environ : str
+        The header line that started this block (e.g., "Begin Elements ElementType").
+    mdpa_element_ids_info : list
+        List to store (original_id, meshio_type, local_idx) for elements.
+    mdpa_condition_ids_info : list
+        List to store (original_id, meshio_type, local_idx) for conditions.
+
+    Raises
+    ------
+    ReadError
+        If non-ASCII cells are attempted, if entity type cannot be determined,
+        or if an unexpected block end statement is found.
+    """
+    if not is_ascii: raise ReadError("Can only read ASCII cells") # Ensure ASCII
     meshio_cell_type = None; is_element_block = False
     if environ is not None:
         cleaned_environ_header = environ.split("//",1)[0].strip()
@@ -249,7 +437,36 @@ def _read_cells(f, cells_list, is_ascii, cell_tags_dict, environ, mdpa_element_i
         raise ReadError(f"Expected '{expected_end_statement}', got '{line_at_end.strip()}' for block {environ}")
 
 def _read_geometries(f, geometries_list, is_ascii, geometry_tags_dict, environ, mdpa_geometry_ids_info):
-    if not is_ascii: raise ReadError("Can only read ASCII geometries")
+    """
+    Reads geometry entity connectivity from a 'Geometries' block in an MDPA file.
+
+    Parses lines from `f` within a "Begin Geometries <GeometryType>" block.
+    Each line defines a geometry entity: ID, Node1, Node2, ... (no PropertyID).
+    Populates `geometries_list` with (meshio_type, node_ids_array) and
+    records original Kratos IDs in `mdpa_geometry_ids_info`.
+
+    Parameters
+    ----------
+    f : file-like object
+        Input file stream, positioned after the "Begin Geometries" line.
+    geometries_list : list
+        List to append (meshio_geometry_type, list_of_node_arrays) tuples to.
+    is_ascii : bool
+        Indicates if the format is ASCII (always true for current implementation).
+    geometry_tags_dict : dict
+        Placeholder for tags, currently not populated for geometries.
+    environ : str
+        The header line that started this block (e.g., "Begin Geometries GeometryType").
+    mdpa_geometry_ids_info : list
+        List to store (original_id, meshio_type, local_idx) for geometries.
+
+    Raises
+    ------
+    ReadError
+        If non-ASCII geometries are attempted, if entity type cannot be determined,
+        or if an unexpected block end statement is found.
+    """
+    if not is_ascii: raise ReadError("Can only read ASCII geometries") # Ensure ASCII
     meshio_geometry_type = None
     if environ is not None:
         cleaned_environ_header = environ.split("//",1)[0].strip()
@@ -313,6 +530,39 @@ def _read_geometries(f, geometries_list, is_ascii, geometry_tags_dict, environ, 
         raise ReadError(f"Expected '{expected_end_statement}', got '{line_at_end.strip() if line_at_end else 'EOF'}' for block {environ}")
 
 def _prepare_cells(cells_list_of_tuples, cell_tags_dict):
+    """
+    Converts raw cell data and tags into meshio CellBlock objects and tag dictionaries.
+
+    This function processes the lists populated by `_read_cells` (and potentially
+    `_read_geometries`). It restructures cell connectivity into NumPy arrays,
+    groups them by cell type into `CellBlock` objects, and organizes
+    associated tags (like 'gmsh:physical', 'gmsh:geometrical') into a
+    dictionary format suitable for `mesh.cell_data`.
+
+    Crucially, it applies Kratos-to-VTK node index permutations for specific
+    element types like 'hexahedron20' and 'hexahedron27' to ensure the
+    node ordering matches meshio's (VTK) conventions.
+
+    Parameters
+    ----------
+    cells_list_of_tuples : list of tuple
+        A list where each tuple is (meshio_cell_type_str, list_of_node_id_lists).
+        This is the raw output from `_read_cells` or `_read_geometries`.
+    cell_tags_dict : dict
+        A dictionary mapping meshio_cell_type_str to a list of tag lists.
+        For example, `{'triangle': [[prop1], [prop2], ...]}`.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - final_cells_for_mesh (list of CellBlock): Processed cells, grouped by
+          type, with node ordering adjusted.
+        - output_cell_tags_meshio (dict): Tags formatted for `mesh.cell_data`,
+          e.g., `{'triangle': {'gmsh:physical': array([...])}}`.
+        - has_additional_tag_data (bool): True if tags with more than two items
+          per cell were encountered (indicating unhandled extra tag data).
+    """
     has_additional_tag_data = False; output_cell_tags_meshio = {}
     for cell_type_str, tags_list_of_lists in cell_tags_dict.items():
         phys, geom = ([] for _ in range(2))
@@ -355,6 +605,27 @@ def _prepare_cells(cells_list_of_tuples, cell_tags_dict):
     return final_cells_for_mesh, output_cell_tags_meshio, has_additional_tag_data
 
 def _parse_submodelpart_entity_list(f, end_block_str):
+    """
+    Reads a list of entity IDs from a SubModelPart sub-block.
+
+    Consumes lines from the file object `f`, interpreting each stripped,
+    non-comment line as an integer ID. Reading stops when a line matching
+    `end_block_str` is encountered or EOF is reached.
+
+    Parameters
+    ----------
+    f : file-like object
+        The input file stream, positioned at the start of the entity ID list.
+    end_block_str : str
+        The string that signifies the end of this list block
+        (e.g., "End SubModelPartNodes", "End SubModelPartElements").
+
+    Returns
+    -------
+    numpy.ndarray
+        A NumPy array of integer entity IDs. Returns an empty array if no
+        valid IDs are found.
+    """
     entity_ids = []
     while True:
         line_raw = f.readline().decode()
@@ -368,9 +639,59 @@ def _parse_submodelpart_entity_list(f, end_block_str):
 
 def read_buffer(f):
     """
-    Reads an MDPA data stream from an open file object `f` and returns a meshio.Mesh object.
-    Handles various data blocks like ModelPartData, Nodes, Elements, Conditions,
-    Properties, Tables, NodalData, ElementalData, ConditionalData, SubModelParts, and Meshes.
+    Reads Kratos MDPA mesh data from an open file object.
+
+    This function parses an MDPA formatted data stream (e.g., an opened file)
+    and constructs a meshio.Mesh object. It processes various MDPA blocks,
+    storing standard mesh information (points, cells, data) in the Mesh object's
+    attributes and MDPA-specific details in `mesh.misc_data`.
+
+    Parameters
+    ----------
+    f : file-like object
+        An open file object (e.g., opened with `open(..., "rb")`) from which
+        to read the MDPA data. The function expects byte strings from `f.readline()`
+        and decodes them as UTF-8.
+
+    Returns
+    -------
+    Mesh
+        A meshio.Mesh object. MDPA-specific data not fitting the standard mesh
+        model is stored in `mesh.misc_data`. This includes:
+        - `reader_element_ids_info`: List of (original_id, type_str, local_idx)
+          for elements, mapping Kratos IDs to meshio cell block structure.
+        - `reader_condition_ids_info`: Similar list for conditions.
+        - `mdpa_geometry_ids_info`: Similar list for geometries.
+        - `submodelpart_info`: Dict containing data for `SubModelPart` blocks,
+          including their own data, tables, and lists of associated raw entity IDs.
+        - `meshes`: Dict containing data for `Mesh` blocks, including their own
+          data and lists of associated raw entity IDs.
+        Other general data from `ModelPartData`, `Properties`, and `Tables` are
+        typically stored in `mesh.field_data`.
+
+    Handled MDPA Blocks:
+    --------------------
+    - `Begin ModelPartData` / `End ModelPartData`: Global parameters.
+    - `Begin Nodes` / `End Nodes`: Nodal coordinates.
+    - `Begin Elements <ElementType>` / `End Elements`: Element connectivity.
+    - `Begin Conditions <ConditionType>` / `End Conditions`: Condition connectivity.
+    - `Begin Geometries <GeometryType>` / `End Geometries`: Geometry connectivity.
+    - `Begin Table <id> <vars...>` / `End Table`: Tabular data.
+    - `Begin Properties <id>` / `End Properties`: Properties, may include inline tables.
+    - `Begin NodalData <Variable>` / `End NodalData`: Data associated with nodes.
+    - `Begin ElementalData <Variable>` / `End ElementalData`: Data for elements.
+    - `Begin ConditionalData <Variable>` / `End ConditionalData`: Data for conditions.
+    - `Begin SubModelPart <Name>` / `End SubModelPart`: Defines a sub-part of the model.
+        - `Begin SubModelPartData` / `End SubModelPartData`
+        - `Begin SubModelPartTables` / `End SubModelPartTables`
+        - `Begin SubModelPartNodes` / `End SubModelPartNodes`
+        - `Begin SubModelPartElements` / `End SubModelPartElements`
+        - `Begin SubModelPartConditions` / `End SubModelPartConditions`
+    - `Begin Mesh <id>` / `End Mesh`: Defines an alternative mesh representation.
+        - `Begin MeshData` / `End MeshData`
+        - `Begin MeshNodes` / `End MeshNodes`
+        - `Begin MeshElements` / `End MeshElements`
+        - `Begin MeshConditions` / `End MeshConditions`
     """
     points = []; cells_list_of_tuples = []; field_data = {}; cell_data_parsed_blocks = {}
     cell_tags_temp = {}; point_data = {}; mdpa_element_ids_info = []; mdpa_condition_ids_info = []
@@ -582,22 +903,171 @@ def read_buffer(f):
     return mesh_obj
 
 def consume_block(f, end_block_str):
+    """
+    Reads and discards lines from a file object until a specific end string is found.
+
+    This is used to skip over blocks in the MDPA file that are not processed
+    or are handled by more specific parsing functions after an initial check
+    reveals the block should be skipped (e.g., malformed header).
+
+    Parameters
+    ----------
+    f : file-like object
+        The input file stream to read from.
+    end_block_str : str
+        The string that, when found as a stripped line, indicates the end
+        of the block to be consumed.
+    """
     while True:
         line = f.readline().decode()
         if not line or line.strip() == end_block_str: break
 
 def _write_nodes(fh, points, float_fmt, binary=False):
+    """
+    Writes nodal coordinates to an MDPA file stream.
+
+    Outputs the "Begin Nodes" and "End Nodes" block, with each node's ID
+    (1-based index) and its X, Y, Z coordinates formatted according to `float_fmt`.
+
+    Parameters
+    ----------
+    fh : file-like object
+        The output file stream (opened in binary mode, e.g., "wb").
+    points : numpy.ndarray
+        A NumPy array of shape (num_nodes, 3) containing nodal coordinates.
+    float_fmt : str
+        Format string for writing floating-point coordinate values.
+    binary : bool, optional
+        If True, would attempt binary writing. Currently raises WriteError
+        as binary is not supported for this function. (Default: False)
+
+    Raises
+    ------
+    WriteError
+        If `binary` is True.
+    """
     fh.write(b"Begin Nodes\n")
-    if binary: raise WriteError()
+    if binary: raise WriteError("Binary writing for nodes not supported.") # Ensure consistent error message
     for k, x in enumerate(points):
         fmt = " {} " + " ".join(3 * ["{:" + float_fmt + "}"]) + "\n"
         fh.write(fmt.format(k + 1, x[0], x[1], x[2]).encode())
     fh.write(b"End Nodes\n\n")
 
 def _compute_blocks_name(mesh, cells_to_iterate):
-    dim_values = [v[1] for v in mesh.field_data.values() if isinstance(v, (list, tuple)) and len(v) > 1]
+    """
+    Determines the entity type ("Elements" or "Conditions") and part name for cell blocks.
+
+    This logic decides if a `CellBlock` from `mesh.cells` should be written as
+    an "Elements" block or a "Conditions" block in the MDPA file. It primarily
+    compares the dimension of the cell type with the overall dimension of the mesh
+    (inferred from `mesh.field_data` or defaulting to 3D).
+    It also tries to derive a part name, often using "gmsh:physical" tags if present
+    and mapped to named physical groups in `mesh.field_data`.
+
+    Parameters
+    ----------
+    mesh : meshio.Mesh
+        The mesh object being written.
+    cells_to_iterate : list of CellBlock
+        The list of cell blocks to process (typically `mesh.cells` after permutation).
+
+    Returns
+    -------
+    list of dict
+        A list of dictionaries, one for each input cell block. Each dictionary
+        has 'entity' (str, "Elements" or "Conditions") and 'part_name' (str) keys.
+    """
+    # Infer mesh dimension (default to 3 if not found in field_data)
+    dim_values = [v[1] for v in mesh.field_data.values() if isinstance(v, (list, tuple)) and len(v) > 1 and isinstance(v[0], str) and isinstance(v[1], int)]
     dim = max(dim_values or [3])
-    pid_to_pname = {v[0]: k for k, v in mesh.field_data.items() if isinstance(v, (list, tuple)) and len(v) > 0}
+
+    # Create a mapping from physical ID (from gmsh:physical tag) to part name
+    # Assumes field_data stores physical group names like: "PhysicalSurfaceName": [tag_id, dimension]
+    pid_to_pname = {
+        v_tuple[0]: k_name
+        for k_name, v_tuple in mesh.field_data.items()
+        if isinstance(v_tuple, (list, tuple)) and len(v_tuple) == 2 and isinstance(v_tuple[0], int) and isinstance(v_tuple[1], int)
+    }
+    # For older field_data format that might be just {tag_id: [name, dim]}
+    # This is less common now but provides some backward compatibility.
+    pid_to_pname.update({
+        k_id: v_list[0]
+        for k_id, v_list in mesh.field_data.items()
+        if isinstance(k_id, int) and isinstance(v_list, (list,tuple)) and len(v_list) == 2 and isinstance(v_list[0], str)
+    })
+
+
+    bname = [{} for _ in cells_to_iterate] # Initialize list of dicts
+
+    has_gmsh_physical = False
+    if mesh.cell_data:
+        for cell_type_data_dict in mesh.cell_data.values():
+            if isinstance(cell_type_data_dict, dict) and "gmsh:physical" in cell_type_data_dict and \
+               isinstance(cell_type_data_dict["gmsh:physical"], np.ndarray) and cell_type_data_dict["gmsh:physical"].size > 0:
+                has_gmsh_physical = True; break
+
+    if not has_gmsh_physical:
+         for i, cell_block in enumerate(cells_to_iterate):
+            mdpa_type_name = _meshio_to_mdpa_type.get(cell_block.type)
+            cell_dim = local_dimension_types.get(mdpa_type_name, 3) # Default to 3D if type unknown
+            entity = "Elements" if cell_dim == dim else "Conditions"
+            bname[i] = {"part_name": f"DefaultPart{i}", "entity": entity}
+         return bname
+
+    for ib, cell_block in enumerate(cells_to_iterate):
+        cell_type_str = cell_block.type
+        physical_tags_for_block = mesh.cell_data.get(cell_type_str, {}).get("gmsh:physical")
+
+        if physical_tags_for_block is None or physical_tags_for_block.size == 0:
+            if not bname[ib]: # If not already named by some other logic
+                mdpa_type_name = _meshio_to_mdpa_type.get(cell_type_str)
+                cell_dim = local_dimension_types.get(mdpa_type_name, 3)
+                entity = "Elements" if cell_dim == dim else "Conditions"
+                bname[ib] = {"part_name": f"DefaultPart_Block{ib}", "entity": entity}
+            continue
+
+        # Use the first physical tag of the block to determine part name and dimension
+        # This assumes all cells in a block likely belong to the same physical group / dimension
+        pid = int(physical_tags_for_block[0]) if len(physical_tags_for_block) > 0 else None
+
+        part_name_candidate = f"UnnamedGroup{pid}" # Default if pid not in pid_to_pname
+        entity_dim_candidate = local_dimension_types.get(_meshio_to_mdpa_type.get(cell_type_str), dim) # Default to mesh dim
+
+        if pid is not None and pid in pid_to_pname:
+            # This name comes from field_data like {"PhysicalName": [pid, pdim]}
+            part_name_candidate = pid_to_pname[pid]
+            # Try to get dimension from the field_data entry associated with this physical group
+            # Search for field_data entry {"PhysicalName": [pid, pdim_val]}
+            pdim_found = False
+            for fd_key, fd_val in mesh.field_data.items():
+                if isinstance(fd_val, (list, tuple)) and len(fd_val) == 2 and fd_val[0] == pid and fd_key == part_name_candidate:
+                    entity_dim_candidate = fd_val[1]
+                    pdim_found = True
+                    break
+            if not pdim_found: # Fallback to cell_type's dimension if specific pdim not in field_data
+                 entity_dim_candidate = local_dimension_types.get(_meshio_to_mdpa_type.get(cell_type_str), dim)
+
+        elif pid is not None: # pid exists but not in pid_to_pname (e.g. no named physical groups)
+             # Use default part_name_candidate and entity_dim_candidate from above
+             pass
+
+
+        entity = "Elements" if entity_dim_candidate == dim else "Conditions"
+        bname[ib] = {"part_name": part_name_candidate, "entity": entity}
+
+    # Fallback for any blocks that might not have been processed
+    for ib_check, cell_block in enumerate(cells_to_iterate):
+        if not bname[ib_check]: # Check if the dictionary is still empty
+            cell_block_type_str = cell_block.type
+            mdpa_type_name = _meshio_to_mdpa_type.get(cell_block_type_str)
+            cell_dim = local_dimension_types.get(mdpa_type_name, 3) # Default to 3D
+            entity = "Elements" if cell_dim == dim else "Conditions"
+            bname[ib_check] = {"part_name": f"FallbackDefaultPart{ib_check}", "entity": entity}
+            warn(f"Block {ib_check} ({cell_block_type_str}) was not named by primary logic, used fallback name.")
+    return bname
+
+def _write_elements_and_conditions(fh, mesh, cells_to_write):
+    mdpa_written_entity_ids = {}
     bname = [{} for _ in cells_to_iterate]
     has_gmsh_physical = False
     if mesh.cell_data:
@@ -646,7 +1116,33 @@ def _compute_blocks_name(mesh, cells_to_iterate):
     return bname
 
 def _write_elements_and_conditions(fh, mesh, cells_to_write):
-    mdpa_written_entity_ids = {}
+    """
+    Writes "Elements" and "Conditions" blocks to an MDPA file stream.
+
+    Iterates through `cells_to_write` (which are permuted `mesh.cells`). For each
+    `CellBlock`, it uses `_compute_blocks_name` to decide if it's an "Elements"
+    or "Conditions" block and determines its part name (MDPA element/condition type).
+    Writes entities with sequential 1-based IDs. Property IDs are taken from
+    "gmsh:physical" tags if available and if a corresponding "Properties <tag_id>"
+    block exists in `mesh.field_data`; otherwise, property ID 0 is used.
+
+    Parameters
+    ----------
+    fh : file-like object
+        Output file stream (binary mode).
+    mesh : meshio.Mesh
+        The mesh object being written.
+    cells_to_write : list of CellBlock
+        Permuted cell blocks to write.
+
+    Returns
+    -------
+    dict
+        `mdpa_written_entity_ids`: A dictionary mapping (meshio_cell_type_str, local_idx_in_block)
+        to the written 1-based MDPA ID for that entity. This is used by other
+        functions like `_write_data_generic` to refer to these entities.
+    """
+    mdpa_written_entity_ids = {} # Map (meshio_type, local_idx_in_block) to written MDPA ID
     bname = _compute_blocks_name(mesh, cells_to_write)
     global_element_id_counter = 1
     global_condition_id_counter = 1
@@ -687,7 +1183,29 @@ def _write_elements_and_conditions(fh, mesh, cells_to_write):
     return mdpa_written_entity_ids
 
 def _write_geometries(fh, geometries_to_write, mdpa_geometry_ids_info_list, float_fmt):
-    """Writes geometry blocks to the MDPA file."""
+    """
+    Writes "Geometries" blocks to an MDPA file stream.
+
+    Iterates through `geometries_to_write` (typically `mesh.geometries_block`).
+    For each `CellBlock` representing a geometry type, it writes a
+    "Begin Geometries <MDPA_Geometry_Type>" block. Geometry entities are
+    written with their original IDs if available in `mdpa_geometry_ids_info_list`,
+    otherwise, a sequential fallback ID is used.
+
+    Parameters
+    ----------
+    fh : file-like object
+        Output file stream (binary mode).
+    geometries_to_write : list of CellBlock
+        List of geometry blocks to write (e.g., from `mesh.geometries_block`).
+    mdpa_geometry_ids_info_list : list of tuple
+        List of (original_id, meshio_type_str, local_idx_in_block) tuples,
+        typically from `mesh.misc_data["mdpa_geometry_ids_info"]`. Used to
+        preserve original Kratos IDs.
+    float_fmt : str
+        Format string for floating-point numbers (not directly used here as
+        geometries are connectivity only, but kept for consistency with other writers).
+    """
     if not geometries_to_write:
         return
 
@@ -725,6 +1243,32 @@ def _write_geometries(fh, geometries_to_write, mdpa_geometry_ids_info_list, floa
         fh.write(b"End Geometries\n\n")
 
 def _write_submodelparts(fh, mesh, cells_to_write, mdpa_written_entity_ids):
+    """
+    Writes SubModelPart blocks to an MDPA file stream.
+
+    Processes `mesh.misc_data["submodelpart_info"]` to write out SubModelPart
+    definitions. This includes their specific data, tables, and lists of
+    node, element, and condition IDs. Element and condition IDs are written
+    as their original Kratos IDs (`elements_raw`, `conditions_raw`) as stored
+    during reading, to maintain fidelity for round-trip scenarios.
+
+    A fallback to `mesh.cell_sets` is present for basic SubModelPart creation
+    if `submodelpart_info` is missing, though this is less rich.
+
+    Parameters
+    ----------
+    fh : file-like object
+        Output file stream (binary mode).
+    mesh : meshio.Mesh
+        The mesh object, potentially containing `misc_data["submodelpart_info"]`.
+    cells_to_write : list of CellBlock
+        The list of cell blocks that were written (used by fallback path, currently inactive).
+    mdpa_written_entity_ids : dict
+        Mapping of (meshio_type, local_idx) to written MDPA ID. (Used by fallback path, currently inactive).
+    """
+    # cells_to_write and mdpa_written_entity_ids are not actively used if submodelpart_info exists
+    # and contains raw IDs, which is the preferred pathway. They were part of an older
+    # logic for deriving SubModelPart contents from mesh.cell_sets and re-indexing.
     if not hasattr(mesh, 'misc_data') or "submodelpart_info" not in mesh.misc_data:
         # Fallback for older mesh objects or if submodelpart_info is not populated
         if hasattr(mesh, 'cell_sets') and mesh.cell_sets: # Indent: 8
@@ -775,9 +1319,38 @@ def _write_submodelparts(fh, mesh, cells_to_write, mdpa_written_entity_ids):
         fh.write(b"End SubModelPart\n\n") # Level 1, 0 spaces
 
 def _write_data_generic(fh, block_name_prefix, variable_name, data_array_dict,
-                        fixed_status_dict, entity_id_map, is_nodal_data): # entity_id_map is mdpa_written_entity_ids
+                        fixed_status_dict, entity_id_map, is_nodal_data):
+    """
+    Writes generic data blocks (NodalData, ElementalData, ConditionalData) to MDPA.
+
+    This function handles the serialization of numpy arrays from `mesh.point_data`
+    or `mesh.cell_data` into the respective MDPA data block format.
+
+    Parameters
+    ----------
+    fh : file-like object
+        Output file stream (binary mode).
+    block_name_prefix : str
+        The prefix for the block, e.g., "NodalData", "ElementalData", "ConditionalData".
+    variable_name : str
+        Name of the variable being written (e.g., "DISPLACEMENT", "PRESSURE").
+    data_array_dict : dict
+        For NodalData: `{"_node_": data_array}`.
+        For Elemental/ConditionalData: `{meshio_cell_type: data_array, ...}`.
+    fixed_status_dict : dict or None
+        For NodalData, contains `{"{variable_name}_fixed_status": array_of_bools}`
+        if fixed statuses are present. Otherwise None.
+    entity_id_map : dict
+        For Elemental/ConditionalData: Maps (meshio_cell_type, local_idx_in_block) to the
+        written 1-based MDPA ID (from `_write_elements_and_conditions`).
+        For NodalData: Not directly used for ID lookup as node IDs are 1-based indices.
+    is_nodal_data : bool
+        True if writing NodalData, False otherwise. Controls ID generation and
+        handling of fixed status.
+    """
     fh.write(f"Begin {block_name_prefix} {variable_name}\n".encode())
     if is_nodal_data:
+        # For NodalData, data_array_dict is expected to be {"_node_": actual_data_array}
         data_array = data_array_dict["_node_"]
         fixed_status_array = fixed_status_dict.get(f"{variable_name}_fixed_status") if fixed_status_dict else None
         is_scalar = data_array.ndim == 1
@@ -810,22 +1383,61 @@ def _write_data_generic(fh, block_name_prefix, variable_name, data_array_dict,
     fh.write(f"End {block_name_prefix}\n\n".encode())
 
 def write(filename, mesh, float_fmt=".16e", binary=False):
-    if binary: raise WriteError()
+    """
+    Writes a meshio.Mesh object to a Kratos MDPA file.
+
+    This function serializes a `Mesh` object into the MDPA format. It attempts
+    to preserve MDPA-specific information stored in `mesh.misc_data` (e.g.,
+    SubModelPart structure, Mesh blocks, original entity IDs if available from
+    `reader_element_ids_info`, etc.) for better round-trip fidelity.
+
+    Node ordering for Kratos-specific elements (e.g., hexahedron20, hexahedron27)
+    is converted from meshio's VTK-based ordering to Kratos-specific ordering.
+
+    Parameters
+    ----------
+    filename : str
+        The path to the MDPA file to be written.
+    mesh : Mesh
+        The meshio.Mesh object to write.
+    float_fmt : str, optional
+        Format string for writing floating-point numbers (default: ".16e").
+    binary : bool, optional
+        If True, attempts to write in binary format. Currently not supported
+        for MDPA; will raise a WriteError (default: False).
+
+    Raises
+    ------
+    WriteError
+        If `binary` is True, as binary MDPA writing is not supported.
+        May also be raised for other I/O errors.
+    """
+    if binary: raise WriteError("Binary writing is not supported for MDPA format.")
     if mesh.points.shape[1] == 2:
         warn("mdpa requires 3D points, but 2D points given. Appending 0 third component.")
         points = np.column_stack([mesh.points, np.zeros_like(mesh.points[:, 0])])
     else: points = mesh.points
 
-    # VTK to Kratos permutations (ensure these are defined at module level or accessible here)
-    # These must be the exact inverses of the _prepare_cells permutations
-    vtk_to_kratos_h20_perm = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 17, 18, 19, 12, 15, 14, 13], dtype=int)
-    vtk_to_kratos_h27_perm = np.array([  # Inverse of kratos_to_vtk_h27_perm
-        0, 1, 2, 3, 4, 5, 6, 7,  # Corners
-        8, 11, 10, 9,  # VTK edges 8,9,10,11 (Bottom) -> Kratos edges 8,11,10,9
-        16, 17, 18, 19,  # VTK edges 12,13,14,15 (Top) -> Kratos edges 16,19,18,17
-        12, 13, 14, 15,  # VTK edges 16,17,18,19 (Vertical) -> Kratos edges 12,15,14,13
-        20, 23, 21, 24, 22, 25, # VTK Face centers 20-25 -> Kratos Face centers 20-25 reordered
-        26 # Volume center
+    # VTK to Kratos permutations. These are the inverses of the Kratos-to-VTK
+    # permutations applied in `_prepare_cells`.
+    vtk_to_kratos_h20_perm = np.array(
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 17, 18, 19, 12, 15, 14, 13], dtype=int
+    )
+    # For H27, VTK node order for edges is typically: bottom (8-11), top (12-15), vertical (16-19).
+    # The Kratos ordering (from kratos_to_vtk_h27_perm in _prepare_cells) maps:
+    #   Kratos bottom edges (nodes 8-11) to VTK 8,11,10,9
+    #   Kratos vertical edges (nodes 12-15) to VTK 16,19,18,17
+    #   Kratos top edges (nodes 16-19) to VTK 12,15,14,13
+    #   Kratos face centers (nodes 20-25) to VTK 20,22,24,21,23,25
+    # This vtk_to_kratos_h27_perm is np.argsort(kratos_to_vtk_h27_perm)
+    # to ensure it's the exact mathematical inverse.
+    vtk_to_kratos_h27_perm = np.array([
+        0, 1, 2, 3, 4, 5, 6, 7,  # Corners: VTK 0-7   -> Kratos 0-7
+        8, 11, 10, 9,            # VTK 8-11  (bottom edges) -> Kratos 8,9,10,11 (indices permuted)
+        16, 19, 18, 17,          # VTK 12-15 (top edges)    -> Kratos 16,17,18,19 (indices permuted)
+        12, 15, 14, 13,          # VTK 16-19 (vertical edges) -> Kratos 12,13,14,15 (indices permuted)
+        20, 23, 21, 24, 22, 25,  # VTK 20-25 (face centers) -> Kratos 20,21,22,23,24,25 (indices permuted)
+        26                       # Center: VTK 26 -> Kratos 26
     ], dtype=int)
 
 
