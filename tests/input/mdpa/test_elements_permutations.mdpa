@@ -1,0 +1,111 @@
+Begin ModelPartData
+    INFO "Test for Hexahedron20 and Hexahedron27 Permutations"
+End ModelPartData
+
+Begin Properties 0
+End Properties
+
+Begin Nodes
+    // 27 nodes are enough for one Hexahedra3D27 or one Hexahedra3D20
+    // Coordinates are not critical, just need the node IDs 1-27
+    1  0.0 0.0 0.0
+    2  1.0 0.0 0.0
+    3  1.0 1.0 0.0
+    4  0.0 1.0 0.0
+    5  0.0 0.0 1.0
+    6  1.0 0.0 1.0
+    7  1.0 1.0 1.0
+    8  0.0 1.0 1.0
+    // Midside nodes (8-19 for VTK, corresponding to Kratos ordering)
+    9  0.5 0.0 0.0 // VTK node 8 (edge 0-1)
+    10 1.0 0.5 0.0 // VTK node 9 (edge 1-2)
+    11 0.5 1.0 0.0 // VTK node 10 (edge 2-3)
+    12 0.0 0.5 0.0 // VTK node 11 (edge 3-0)
+    13 0.5 0.0 1.0 // VTK node 12 (edge 4-5)
+    14 1.0 0.5 1.0 // VTK node 13 (edge 5-6)
+    15 0.5 1.0 1.0 // VTK node 14 (edge 6-7)
+    16 0.0 0.5 1.0 // VTK node 15 (edge 7-4)
+    17 0.0 0.0 0.5 // VTK node 16 (edge 0-4)
+    18 1.0 0.0 0.5 // VTK node 17 (edge 1-5)
+    19 1.0 1.0 0.5 // VTK node 18 (edge 2-6)
+    20 0.0 1.0 0.5 // VTK node 19 (edge 3-7)
+    // Face-center nodes (20-25 for VTK)
+    21 0.5 0.5 0.0 // VTK node 20 (face 0-1-2-3)
+    22 0.5 0.0 0.5 // VTK node 21 (face 0-1-5-4)
+    23 1.0 0.5 0.5 // VTK node 22 (face 1-2-6-5)
+    24 0.5 1.0 0.5 // VTK node 23 (face 2-3-7-6)
+    25 0.0 0.5 0.5 // VTK node 24 (face 3-0-4-7)
+    26 0.5 0.5 1.0 // VTK node 25 (face 4-5-6-7)
+    // Volume-center node (26 for VTK)
+    27 0.5 0.5 0.5 // VTK node 26
+End Nodes
+
+Begin Elements Hexahedra3D20 // Kratos ordering for H20
+    // VTK order for H20 nodes: 0-7 (corners), 8-19 (mid-edges)
+    // Kratos order for H20 (from vtk_to_kratos_h20_perm in write()):
+    // [0,1,2,3,4,5,6,7, 8,11,10,9, 16,17,18,19, 12,15,14,13] (these are Kratos node indices)
+    // Add 1 for MDPA 1-based indexing.
+    // Nodes used: 1-8 (corners), 9-20 (mid-edges)
+    // Kratos H20 node indices (0-based) corresponding to VTK 0-19:
+    // Corners (0-7) -> Kratos 0-7
+    // VTK Edge 8 (0-1 mid) -> Kratos 8
+    // VTK Edge 9 (1-2 mid) -> Kratos 11
+    // VTK Edge 10 (2-3 mid) -> Kratos 10
+    // VTK Edge 11 (3-0 mid) -> Kratos 9
+    // VTK Edge 12 (4-5 mid) -> Kratos 16 (this is from the vtk_to_kratos map [...,16,17,18,19,...])
+    // VTK Edge 13 (5-6 mid) -> Kratos 17
+    // VTK Edge 14 (6-7 mid) -> Kratos 18
+    // VTK Edge 15 (7-4 mid) -> Kratos 19
+    // VTK Edge 16 (0-4 mid) -> Kratos 12 (this is from the vtk_to_kratos map [...,12,15,14,13])
+    // VTK Edge 17 (1-5 mid) -> Kratos 15
+    // VTK Edge 18 (2-6 mid) -> Kratos 14
+    // VTK Edge 19 (3-7 mid) -> Kratos 13
+    // So, the MDPA line lists Kratos node numbers (1-based from these 0-based Kratos indices)
+    // Element ID 1, Property ID 0. Nodes:
+    // Kratos corners (1-8)
+    // Kratos bottom edges (orig VTK 8,9,10,11 -> Kratos 8,11,10,9) -> MDPA Nodes 9,12,11,10
+    // Kratos top edges (orig VTK 12,13,14,15 -> Kratos 12,15,14,13, mapping to vtk_to_kratos[12:16] which are Kratos nodes 13,16,15,14) -> MDPA Nodes 13,16,15,14
+    // Kratos vertical edges (orig VTK 16,17,18,19 -> Kratos 16,17,18,19, mapping to vtk_to_kratos[16:20] which are Kratos nodes 17,18,19,20) -> MDPA Nodes 17,18,19,20
+    // Using vtk_to_kratos_h20_perm = [0,1,2,3,4,5,6,7, 8,11,10,9, 16,17,18,19, 12,15,14,13]
+    // Nodes 1-20 in VTK order are: 1,2,3,4,5,6,7,8, 9,10,11,12, 13,14,15,16, 17,18,19,20
+    // Applying permutation:
+    // 1,2,3,4,5,6,7,8, (corners)
+    // 9,12,11,10, (bottom edges in Kratos order, using VTK nodes 9,10,11,12)
+    // 17,18,19,20, (VTK nodes 17,18,19,20 are vertical edges, these become Kratos's 12,13,14,15th type nodes)
+    // 13,16,15,14 (VTK nodes 13,14,15,16 are top edges, these become Kratos's 16,17,18,19th type nodes)
+    // This is getting confusing. Let's use the definition:
+    // kratos_to_vtk_h20_perm = np.array([0,1,2,3,4,5,6,7, 8,11,10,9, 16,19,18,17, 12,13,14,15])
+    // This means Kratos node 0 is VTK 0, Kratos node 1 is VTK 1, ..., Kratos node 8 is VTK 8, Kratos node 9 is VTK 11, etc.
+    // To write Kratos order in file, we list Kratos nodes.
+    // Kratos Node 0 -> MDPA Node 1 (VTK Node 0)
+    // Kratos Node 1 -> MDPA Node 2 (VTK Node 1)
+    // ...
+    // Kratos Node 8 -> MDPA Node 9 (VTK Node 8)
+    // Kratos Node 9 -> MDPA Node 12 (VTK Node 11)
+    // Kratos Node 10 -> MDPA Node 11 (VTK Node 10)
+    // Kratos Node 11 -> MDPA Node 10 (VTK Node 9)
+    // Kratos Node 12 -> MDPA Node 17 (VTK Node 16)
+    // Kratos Node 13 -> MDPA Node 20 (VTK Node 19)
+    // Kratos Node 14 -> MDPA Node 19 (VTK Node 18)
+    // Kratos Node 15 -> MDPA Node 18 (VTK Node 17)
+    // Kratos Node 16 -> MDPA Node 13 (VTK Node 12)
+    // Kratos Node 17 -> MDPA Node 14 (VTK Node 13)
+    // Kratos Node 18 -> MDPA Node 15 (VTK Node 14)
+    // Kratos Node 19 -> MDPA Node 16 (VTK Node 15)
+    // So, the list of MDPA nodes (1-based) for Kratos H20 element is:
+    // 1,2,3,4,5,6,7,8, 9,12,11,10, 17,20,19,18, 13,14,15,16
+    1 0 1 2 3 4 5 6 7 8 9 12 11 10 17 20 19 18 13 14 15 16
+
+Begin Elements Hexahedra3D27 // Kratos ordering for H27
+    // vtk_to_kratos_h27_perm = [0,1,2,3,4,5,6,7, 8,11,10,9, 16,19,18,17, 12,15,14,13, 20,23,21,24,22,25, 26]
+    // This is the Kratos order. Add 1 for MDPA 1-based node IDs.
+    // Nodes used: 1-27
+    // MDPA nodes (1-based) for Kratos H27 element:
+    // 1,2,3,4,5,6,7,8, (corners)
+    // 9,12,11,10, (Kratos bottom edges)
+    // 17,20,19,18, (Kratos vertical edges)
+    // 13,16,15,14, (Kratos top edges)
+    // 21,24,22,25,23,26, (Kratos face centers)
+    // 27 (Kratos volume center)
+    2 0 1 2 3 4 5 6 7 8 9 12 11 10 17 20 19 18 13 16 15 14 21 24 22 25 23 26 27
+End Elements

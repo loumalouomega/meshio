@@ -1,0 +1,82 @@
+Begin ModelPartData
+    TITLE "Test Hierarchical SubModelParts"
+End ModelPartData
+
+Begin Properties 10
+    DENSITY 1.0
+End Properties
+
+Begin Table 1 TIME VALUE
+    0.0 0.0
+    1.0 1.0
+End Table
+
+Begin Nodes
+    1  0.0  0.0  0.0
+    2  1.0  0.0  0.0
+    3  2.0  0.0  0.0
+    4  0.0  1.0  0.0
+    5  1.0  1.0  0.0
+    6  2.0  1.0  0.0
+End Nodes
+
+Begin Elements Line2D2N // Kratos name for Line2
+    1  10  1 2  // Element 1
+    2  10  2 3  // Element 2
+    3  10  4 5  // Element 3
+    4  10  5 6  // Element 4
+End Elements
+
+Begin Conditions Line2D2N // Some conditions
+    101 10 1 4  // Condition 101
+End Conditions
+
+Begin SubModelPart SMP1
+    Begin SubModelPartData
+        SMP1_DATA_FLOAT 123.456
+        SMP1_DATA_INT 789
+        SMP1_DATA_STR "SMP1_String"
+    End SubModelPartData
+    Begin SubModelPartTables
+        1 // Reference top-level Table 1
+    End SubModelPartTables
+    Begin SubModelPartNodes
+        1
+        2
+        4
+        5
+    End SubModelPartNodes
+    Begin SubModelPartElements
+        1 // Element 1
+        3 // Element 3
+    End SubModelPartElements
+    Begin SubModelPartConditions
+        101 // Condition 101
+    End SubModelPartConditions
+
+    Begin SubModelPart SMP1_Child1
+        Begin SubModelPartData
+            CHILD1_DATA "Child1 Info"
+        End SubModelPartData
+        Begin SubModelPartNodes
+            1
+            4
+        End SubModelPartNodes
+        Begin SubModelPartElements // Kratos allows specifying elements already in parent
+            1
+        End SubModelPartElements
+    End SubModelPart // SMP1_Child1
+
+    Begin SubModelPart SMP1_Child2
+        Begin SubModelPartData
+            CHILD2_ACTIVE .TRUE.
+        End SubModelPartData
+        Begin SubModelPartNodes
+            2
+            5
+        End SubModelPartNodes
+        Begin SubModelPartElements
+            3
+        End SubModelPartElements
+    End SubModelPart // SMP1_Child2
+End SubModelPart // SMP1

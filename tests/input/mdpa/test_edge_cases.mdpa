@@ -1,0 +1,47 @@
+// This is an MDPA file for testing edge cases.
+// It includes various scenarios like empty blocks, comments, and missing optional blocks.
+
+Begin ModelPartData
+    // Empty ModelPartData is allowed
+End ModelPartData
+
+// Only Nodes defined, no elements or other data
+Begin Nodes
+    1  0.0  0.0  0.0 // A single node
+    // Comment line within nodes block
+    2  1.0  0.0  0.0
+End Nodes
+
+Begin Properties 10 // Properties block for elements below
+    DENSITY 1.0
+End Properties
+
+// Elements defined, referencing Property 10
+Begin Elements Triangle2D3
+    1  10  1 2 1 // Element using node 1 twice (geometrically degenerate but valid for parsing)
+End Elements
+
+// Elements defined, but no corresponding Properties block explicitly (should assume Property 0)
+Begin Elements Line2D2
+    2  0  1 2 // Element referencing implicit Property 0
+End Elements
+
+// An empty elements block
+Begin Elements Quadrilateral2D4
+End Elements
+
+// Comments and blank lines test
+//
+// Next block is NodalData
+Begin NodalData TEST_SCALAR
+    // Data for node 1
+    1 100.5
+    // Data for node 2 with end-of-line comment
+    2 200.5 // Value for node 2
+End NodalData
+
+Begin NodalData MALFORMED_NODAL_DATA_LINE_TEST
+    1 1.0 2.0 // Valid line
+    WRONG_ID_TYPE 3.0 // Invalid ID, should be skipped with warning
+    3 4.0 5.0 6.0 // Potentially too many values if first line set num_components=2
+End NodalData
