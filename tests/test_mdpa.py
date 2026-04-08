@@ -1407,7 +1407,8 @@ def test_write_manual_geometries(tmp_path):
         meshio.CellBlock("triangle", np.array([[0, 1, 2]])),
         meshio.CellBlock("line", np.array([[0, 3], [1,4]]))
     ]
-    mesh1 = meshio.Mesh(points, [], geometries_block=geometries1)
+    mesh1 = meshio.Mesh(points, [])
+    mesh1.geometries_block = geometries1
 
     # Use a unique filename for this sub-test to avoid interference if run in parallel or reused tmp_path
     file1_path = tmp_path / "manual_geoms_sequential_ids.mdpa"
@@ -1454,7 +1455,9 @@ def test_write_manual_geometries(tmp_path):
         (55, "quad", 0),
         (77, "vertex", 0)
     ]
-    mesh2 = meshio.Mesh(points, [], geometries_block=geometries2, misc_data={"mdpa_geometry_ids_info": manual_ids_info})
+    mesh2 = meshio.Mesh(points, [])
+    mesh2.geometries_block = geometries2
+    mesh2.misc_data = {"mdpa_geometry_ids_info": manual_ids_info}
 
     file2_path = tmp_path / "manual_geoms_explicit_ids.mdpa"
     meshio.mdpa.write(file2_path, mesh2)
