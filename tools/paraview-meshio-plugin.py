@@ -48,15 +48,13 @@ class MeshioReader(VTKPythonAlgorithmBase):
         return meshio_input_filetypes
 
     @smproperty.stringvector(name="FileFormat", number_of_elements="1")
-    @smdomain.xml(
-        """
+    @smdomain.xml("""
         <StringListDomain name="list">
             <RequiredProperties>
                 <Property name="StringInfo" function="StringInfo"/>
             </RequiredProperties>
         </StringListDomain>
-        """
-    )
+        """)
     def SetFileFormat(self, file_format):
         # Automatically deduce input format
         if file_format == "automatic":

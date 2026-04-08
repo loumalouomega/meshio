@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Union
+import copy
+from typing import Union
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -117,7 +118,9 @@ class Mesh:
     def __init__(
         self,
         points: ArrayLike,
-        cells: Union[dict[str, ArrayLike], list[Union[tuple[str, ArrayLike], CellBlock]]],
+        cells: Union[
+            dict[str, ArrayLike], list[Union[tuple[str, ArrayLike], CellBlock]]
+        ],
         point_data: Union[dict[str, ArrayLike], None] = None,
         cell_data: Union[dict[str, list[ArrayLike]], None] = None,
         field_data=None,
