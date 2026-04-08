@@ -1786,3 +1786,27 @@ def test_empty_file_write_read(tmp_path):
             elif isinstance(value, dict):
                 assert not value, f"misc_data field {key} should be an empty dict for empty mesh."
             # Add other type checks if necessary
+
+@pytest.mark.parametrize(
+    "filename, ref_num_points, ref_num_cells, ref_cell_type",
+    [
+        ("small_cube.mdpa", 8, 6, "tetra"),
+        ("submodelpart_test.mdpa", 6, 3, "quad"),
+    ],
+)
+def test_reference_file(filename, ref_num_points, ref_num_cells, ref_cell_type):
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "mdpa" / filename
+
+    mesh = meshio.read(filename)
+    assert len(mesh.points) == ref_num_points
+    assert len(mesh.cells) == 1
+    assert mesh.cells[0].type == ref_cell_type
+    assert len(mesh.cells[0].data) == ref_num_cells
+
+    if filename.name == "submodelpart_test.mdpa":
+        assert "submodelpart_info" in mesh.misc_data
+        assert "Parts_Parts_Auto1" in mesh.misc_data["submodelpart_info"]
+        smp = mesh.misc_data["submodelpart_info"]["Parts_Parts_Auto1"]
+        assert len(smp["nodes"]) == 6
+        assert len(smp["elements_raw"]) == 3
