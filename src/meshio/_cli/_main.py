@@ -19,9 +19,8 @@ def main(argv=None):
         help="display version information",
     )
 
-    subparsers = parent_parser.add_subparsers(
-        title="subcommands", dest="command", required=True
-    )
+    subparsers = parent_parser.add_subparsers(title="subcommands", dest="command")
+    subparsers.required = True
 
     parser = subparsers.add_parser("convert", help="Convert mesh files", aliases=["c"])
     _convert.add_args(parser)
