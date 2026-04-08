@@ -1,6 +1,6 @@
-import pytest
+import pathlib  # Ensure pathlib is imported at the top
+
 import numpy as np
-import pathlib # Ensure pathlib is imported at the top
 
 import meshio
 
@@ -59,9 +59,10 @@ Begin Elements Triangle2D3
 1 0 1 2 3
 End Elements
 """
-    import pytest # Import pytest
-    import tempfile
     import pathlib
+    import tempfile
+
+
     # from meshio.mdpa import _mdpa # No longer directly calling read_buffer
 
     # Create a temporary file to use with meshio.mdpa.read
@@ -84,7 +85,7 @@ End Elements
         "GRAVITY_X": 0.0,
         "GRAVITY_Y": -9.81,
         "GRAVITY_Z": 0.0,
-        "STRING_PARAM": '"Test String"', # Note: Kratos itself might handle quotes differently internally
+        "STRING_PARAM": '"Test String"',  # Note: Kratos itself might handle quotes differently internally
     }
     assert mesh.field_data == expected_field_data
 
@@ -102,7 +103,9 @@ def test_write_from_gmsh(tmp_path):
     fk = tmp_path / "test.mdpa"
     m.write(fk, "mdpa")
     mdpa_mesh = fk.read_text().split("\n")
-    pytest.xfail("Complex string matching and SubModelPart fallback from cell_sets needs more work or test adjustment.")
+    pytest.xfail(
+        "Complex string matching and SubModelPart fallback from cell_sets needs more work or test adjustment."
+    )
     assert mdpa_mesh == mdpa_mesh_ref
 
 
@@ -142,11 +145,6 @@ End Nodes
     # Expected warnings
     # Order might not be guaranteed, so check for individual warnings if necessary
     # For now, let's assume they might appear in this order or use a set for checking.
-    expected_warnings = [
-        # UserWarning("Row in Table 1 contains non-numeric data. Skipping row: 0.4 50.0 BAD_DATA_POINT"), # This is now skipped by //
-        UserWarning("Row in Table 1 has 4 values, but 3 variables were defined. Skipping row: 0.5   20.0   0.010 0.1")
-    ]
-
 
     # For simplicity, just check if warnings occur, not their exact content for now,
     # as the order or exact message might slightly vary based on processing.
@@ -175,29 +173,36 @@ End Nodes
     assert "table_1" in mesh.field_data
     table1 = mesh.field_data["table_1"]
     assert table1["variables"] == ["TIME", "FORCE_Y", "DISPLACEMENT_Z"]
-    expected_data1 = np.array([
-        [0.0, 0.0, 0.0],
-        [0.1, 100.0, 0.001],
-        [0.2, 150.0, 0.005],
-        [0.3, 100.0, 0.015],
-    ])
+    expected_data1 = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.1, 100.0, 0.001],
+            [0.2, 150.0, 0.005],
+            [0.3, 100.0, 0.015],
+        ]
+    )
     np.testing.assert_array_almost_equal(table1["data"], expected_data1)
 
     # Check Table 2
     assert "table_2" in mesh.field_data
     table2 = mesh.field_data["table_2"]
     assert table2["variables"] == ["TIME", "TEMPERATURE"]
-    expected_data2 = np.array([
-        [1.0, 300.0],
-        [2.0, 310.0],
-    ])
+    expected_data2 = np.array(
+        [
+            [1.0, 300.0],
+            [2.0, 310.0],
+        ]
+    )
     np.testing.assert_array_almost_equal(table2["data"], expected_data2)
 
     # Check Table 3 (Empty Table)
     assert "table_3" in mesh.field_data
     table3 = mesh.field_data["table_3"]
     assert table3["variables"] == ["EMPTY_TABLE_VAR1", "EMPTY_TABLE_VAR2"]
-    assert table3["data"].shape == (0, 2) # Expecting an empty array with correct number of columns
+    assert table3["data"].shape == (
+        0,
+        2,
+    )  # Expecting an empty array with correct number of columns
 
 
 def test_read_properties_data(tmp_path):
@@ -244,13 +249,15 @@ End Nodes
     assert props1["CONDUCTIVITY"] == 45.0
     assert props1["SOME_STRING_DATA"] == '"A_String_Value With Spaces"'
 
-    assert "table_1" in props1 # Inline table
+    assert "table_1" in props1  # Inline table
     table1_props1 = props1["table_1"]
     assert table1_props1["variables"] == ["STRESS_LIMIT", "TEMPERATURE"]
-    expected_data_t1_p1 = np.array([
-        [200.0e6, 25.0],
-        [180.0e6, 100.0],
-    ])
+    expected_data_t1_p1 = np.array(
+        [
+            [200.0e6, 25.0],
+            [180.0e6, 100.0],
+        ]
+    )
     np.testing.assert_array_almost_equal(table1_props1["data"], expected_data_t1_p1)
 
     # Check Properties 2
@@ -316,20 +323,23 @@ End NodalData
 
     assert "TEMPERATURE_fixed_status" in mesh.point_data
     temp_fixed_status = mesh.point_data["TEMPERATURE_fixed_status"]
-    expected_temp_fixed = np.array([-1, 0, -1, 1], dtype=int) # -1 for not specified, 0 for not fixed, 1 for fixed
+    expected_temp_fixed = np.array(
+        [-1, 0, -1, 1], dtype=int
+    )  # -1 for not specified, 0 for not fixed, 1 for fixed
     np.testing.assert_array_equal(temp_fixed_status, expected_temp_fixed)
-
 
     # Test DISPLACEMENT (vector)
     assert "DISPLACEMENT" in mesh.point_data
     disp_data = mesh.point_data["DISPLACEMENT"]
     assert disp_data.shape == (4, 3)
-    expected_disp = np.array([
-        [0.0, 0.0, 0.1],
-        [0.01, 0.0, 0.0],
-        [np.nan, np.nan, np.nan],
-        [0.05, 0.01, 0.001]
-    ])
+    expected_disp = np.array(
+        [
+            [0.0, 0.0, 0.1],
+            [0.01, 0.0, 0.0],
+            [np.nan, np.nan, np.nan],
+            [0.05, 0.01, 0.001],
+        ]
+    )
     np.testing.assert_array_almost_equal(disp_data, expected_disp)
 
     assert "DISPLACEMENT_fixed_status" in mesh.point_data
@@ -341,7 +351,7 @@ End NodalData
     assert "IS_ACTIVE" in mesh.point_data
     is_active_data = mesh.point_data["IS_ACTIVE"]
     assert is_active_data.shape == (4,)
-    expected_is_active = np.array([1, 0, 1, 0], dtype=int) # 1 for listed, 0 for not
+    expected_is_active = np.array([1, 0, 1, 0], dtype=int)  # 1 for listed, 0 for not
     np.testing.assert_array_equal(is_active_data, expected_is_active)
 
 
@@ -393,7 +403,7 @@ End ConditionalData
     mesh = meshio.mdpa.read(test_file)
 
     assert len(mesh.points) == 6
-    assert len(mesh.cells) == 3 # Triangles, Quads, Lines (Conditions)
+    assert len(mesh.cells) == 3  # Triangles, Quads, Lines (Conditions)
 
     # Check cell structure (ensuring IDs were processed correctly if this affects structure)
     # This part is more about _read_cells than the data parsing itself, but good check.
@@ -401,46 +411,44 @@ End ConditionalData
     assert len(mesh.cells[0].data) == 2
     assert mesh.cells[1].type == "quad"
     assert len(mesh.cells[1].data) == 1
-    assert mesh.cells[2].type == "line" # From Conditions Line2D2N
+    assert mesh.cells[2].type == "line"  # From Conditions Line2D2N
     assert len(mesh.cells[2].data) == 2
 
     # Check ElementalData: STRESSES_SCALAR
     assert "triangle" in mesh.cell_data
     assert "STRESSES_SCALAR" in mesh.cell_data["triangle"]
     temp_tri = mesh.cell_data["triangle"]["STRESSES_SCALAR"]
-    assert temp_tri.shape == (2,) # 2 triangles
+    assert temp_tri.shape == (2,)  # 2 triangles
     np.testing.assert_array_almost_equal(temp_tri, np.array([10.1, np.nan]))
 
     assert "quad" in mesh.cell_data
     assert "STRESSES_SCALAR" in mesh.cell_data["quad"]
     temp_quad = mesh.cell_data["quad"]["STRESSES_SCALAR"]
-    assert temp_quad.shape == (1,) # 1 quad
+    assert temp_quad.shape == (1,)  # 1 quad
     np.testing.assert_array_almost_equal(temp_quad, np.array([30.3]))
 
     # Check ElementalData: FLUXES[3]
     assert "FLUXES" in mesh.cell_data["triangle"]
     flux_tri = mesh.cell_data["triangle"]["FLUXES"]
-    assert flux_tri.shape == (2, 3) # 2 triangles, 3 components
-    expected_flux_tri = np.array([
-        [1.0, 1.1, 1.2],
-        [2.0, 2.1, 2.2]
-    ])
+    assert flux_tri.shape == (2, 3)  # 2 triangles, 3 components
+    expected_flux_tri = np.array([[1.0, 1.1, 1.2], [2.0, 2.1, 2.2]])
     np.testing.assert_array_almost_equal(flux_tri, expected_flux_tri)
 
-    assert "quad" in mesh.cell_data # quad key should exist
-    if "FLUXES" in mesh.cell_data["quad"]: # FLUXES might not be there if all omitted
-         flux_quad = mesh.cell_data["quad"]["FLUXES"]
-         assert flux_quad.shape == (1,3)
-         np.testing.assert_array_almost_equal(flux_quad, np.array([[np.nan,np.nan,np.nan]]))
-    else: # Check that it's not there because it was fully NaN
+    assert "quad" in mesh.cell_data  # quad key should exist
+    if "FLUXES" in mesh.cell_data["quad"]:  # FLUXES might not be there if all omitted
+        flux_quad = mesh.cell_data["quad"]["FLUXES"]
+        assert flux_quad.shape == (1, 3)
+        np.testing.assert_array_almost_equal(
+            flux_quad, np.array([[np.nan, np.nan, np.nan]])
+        )
+    else:  # Check that it's not there because it was fully NaN
         pass
 
-
     # Check ConditionalData: PRESSURE
-    assert "line" in mesh.cell_data # Conditions are mapped to cell types
+    assert "line" in mesh.cell_data  # Conditions are mapped to cell types
     assert "PRESSURE" in mesh.cell_data["line"]
     pressure_line = mesh.cell_data["line"]["PRESSURE"]
-    assert pressure_line.shape == (2,) # 2 line conditions
+    assert pressure_line.shape == (2,)  # 2 line conditions
     expected_pressure_line = np.array([np.nan, -5.5])
     np.testing.assert_array_almost_equal(pressure_line, expected_pressure_line)
 
@@ -513,32 +521,36 @@ End Mesh
     assert "meshes" in mesh.misc_data
     parsed_meshes = mesh.misc_data["meshes"]
 
-    assert 0 not in parsed_meshes # Mesh 0 should be skipped
+    assert 0 not in parsed_meshes  # Mesh 0 should be skipped
 
     # Check Mesh 1
     assert 1 in parsed_meshes
     mesh1_content = parsed_meshes[1]
-    assert not mesh1_content["mesh_data"] # Empty MeshData
-    np.testing.assert_array_equal(mesh1_content["nodes"], np.array([0, 2])) # 0-based
+    assert not mesh1_content["mesh_data"]  # Empty MeshData
+    np.testing.assert_array_equal(mesh1_content["nodes"], np.array([0, 2]))  # 0-based
     assert not mesh1_content["elements"]
     assert not mesh1_content["conditions"]
 
     # Check Mesh 2
     assert 2 in parsed_meshes
     mesh2_content = parsed_meshes[2]
-    assert mesh2_content["mesh_data"]["MESH_NAME"] == '"MySecondMesh"' # Strings are read with quotes
-    assert mesh2_content["mesh_data"]["ANALYSIS_STEP"] == 10.0 # Floats
-    assert mesh2_content["mesh_data"]["IS_RESTARTED"] == ".TRUE." # Read as string
+    assert (
+        mesh2_content["mesh_data"]["MESH_NAME"] == '"MySecondMesh"'
+    )  # Strings are read with quotes
+    assert mesh2_content["mesh_data"]["ANALYSIS_STEP"] == 10.0  # Floats
+    assert mesh2_content["mesh_data"]["IS_RESTARTED"] == ".TRUE."  # Read as string
 
-    np.testing.assert_array_equal(mesh2_content["nodes"], np.array([1, 3, 4])) # 0-based
+    np.testing.assert_array_equal(
+        mesh2_content["nodes"], np.array([1, 3, 4])
+    )  # 0-based
 
-    expected_elements_raw_ids_m2 = [1, 2] # Original MDPA IDs
+    expected_elements_raw_ids_m2 = [1, 2]  # Original MDPA IDs
     assert mesh2_content.get("elements_raw_ids") == expected_elements_raw_ids_m2
-    assert "elements" not in mesh2_content # Old key should be gone
+    assert "elements" not in mesh2_content  # Old key should be gone
 
-    expected_conditions_raw_ids_m2 = [10] # Original MDPA ID
+    expected_conditions_raw_ids_m2 = [10]  # Original MDPA ID
     assert mesh2_content.get("conditions_raw_ids") == expected_conditions_raw_ids_m2
-    assert "conditions" not in mesh2_content # Old key should be gone
+    assert "conditions" not in mesh2_content  # Old key should be gone
 
     # Check Mesh 3
     assert 3 in parsed_meshes
@@ -610,14 +622,17 @@ End SubModelPart // OuterRegion
     # Check OuterRegion
     assert "OuterRegion" in smp_info
     outer_region_info = smp_info["OuterRegion"]
-    assert outer_region_info["data"]["REGION_TYPE"] == '"Boundary"' # Strings are read with quotes
+    assert (
+        outer_region_info["data"]["REGION_TYPE"] == '"Boundary"'
+    )  # Strings are read with quotes
     assert outer_region_info["data"]["REGION_ID"] == 200
     assert outer_region_info["tables"] == [1]
 
     # Verify parsed entity IDs stored in misc_data (nodes are 0-based, elements/conditions are 1-based raw)
-    np.testing.assert_array_equal(outer_region_info["nodes"], np.array([0, 1])) # Expect 0-based from current parser
+    np.testing.assert_array_equal(
+        outer_region_info["nodes"], np.array([0, 1])
+    )  # Expect 0-based from current parser
     np.testing.assert_array_equal(outer_region_info["elements_raw"], np.array([1]))
-
 
     # Check OuterRegion/InnerZone (nested)
     nested_smp_name = "OuterRegion/InnerZone"
@@ -625,8 +640,10 @@ End SubModelPart // OuterRegion
     inner_zone_info = smp_info[nested_smp_name]
     assert inner_zone_info["data"]["ZONE_ID"] == 300
     assert inner_zone_info["data"]["IS_ACTIVE"] == ".TRUE."
-    assert not inner_zone_info["tables"] # No SubModelPartTables block
-    np.testing.assert_array_equal(inner_zone_info["nodes"], np.array([2, 3])) # MDPA IDs 3,4 -> 0-based 2,3
+    assert not inner_zone_info["tables"]  # No SubModelPartTables block
+    np.testing.assert_array_equal(
+        inner_zone_info["nodes"], np.array([2, 3])
+    )  # MDPA IDs 3,4 -> 0-based 2,3
 
     # Check global field data and table
     assert mesh.field_data["GLOBAL_ID"] == 123
@@ -748,12 +765,13 @@ End SubModelPart
 
     # Write to string
     import io
-    written_buffer = io.BytesIO() # Use BytesIO as writer expects binary stream
+
+    written_buffer = io.BytesIO()  # Use BytesIO as writer expects binary stream
     meshio.mdpa.write(written_buffer, mesh1)
     written_mdpa_bytes = written_buffer.getvalue()
 
     # Read again
-    mesh2 = meshio.mdpa.read(io.BytesIO(written_mdpa_bytes)) # Pass BytesIO to reader
+    mesh2 = meshio.mdpa.read(io.BytesIO(written_mdpa_bytes))  # Pass BytesIO to reader
 
     # Compare points
     np.testing.assert_allclose(mesh1.points, mesh2.points, atol=1e-15)
@@ -784,37 +802,53 @@ End SubModelPart
         assert_mesh_data_equal(
             mesh1.misc_data.get("submodelpart_info", {}),
             mesh2.misc_data.get("submodelpart_info", {}),
-            tol=1e-15
+            tol=1e-15,
         )
 
     if "meshes" in mesh1.misc_data or "meshes" in mesh2.misc_data:
-        assert sorted(mesh1.misc_data.get("meshes", {}).keys()) == \
-               sorted(mesh2.misc_data.get("meshes", {}).keys()), "Mesh IDs mismatch in misc_data"
+        assert sorted(mesh1.misc_data.get("meshes", {}).keys()) == sorted(
+            mesh2.misc_data.get("meshes", {}).keys()
+        ), "Mesh IDs mismatch in misc_data"
 
         for mesh_id in mesh1.misc_data.get("meshes", {}):
             mesh1_content = mesh1.misc_data["meshes"][mesh_id]
             mesh2_content = mesh2.misc_data["meshes"][mesh_id]
 
-            assert_mesh_data_equal(mesh1_content.get("mesh_data", {}), mesh2_content.get("mesh_data", {}), tol=1e-15)
-            assert_mesh_data_equal(mesh1_content.get("nodes", []), mesh2_content.get("nodes", []), tol=1e-15)
+            assert_mesh_data_equal(
+                mesh1_content.get("mesh_data", {}),
+                mesh2_content.get("mesh_data", {}),
+                tol=1e-15,
+            )
+            assert_mesh_data_equal(
+                mesh1_content.get("nodes", []),
+                mesh2_content.get("nodes", []),
+                tol=1e-15,
+            )
 
             # Check for "elements_raw_ids" and "conditions_raw_ids"
             m1_elements_raw = mesh1_content.get("elements_raw_ids", [])
             m2_elements_raw = mesh2_content.get("elements_raw_ids", [])
-            assert len(m1_elements_raw) == len(m2_elements_raw), \
-                f"Mesh {mesh_id} 'elements_raw_ids' length mismatch: {len(m1_elements_raw)} vs {len(m2_elements_raw)}"
+            assert len(m1_elements_raw) == len(
+                m2_elements_raw
+            ), f"Mesh {mesh_id} 'elements_raw_ids' length mismatch: {len(m1_elements_raw)} vs {len(m2_elements_raw)}"
             # Assuming order matters and items are integers (original MDPA IDs)
             for idx, (item1, item2) in enumerate(zip(m1_elements_raw, m2_elements_raw)):
-                 assert item1 == item2, \
-                    f"Mesh {mesh_id} 'elements_raw_ids' item mismatch at index {idx}: {item1} vs {item2}"
+                assert (
+                    item1 == item2
+                ), f"Mesh {mesh_id} 'elements_raw_ids' item mismatch at index {idx}: {item1} vs {item2}"
 
             m1_conditions_raw = mesh1_content.get("conditions_raw_ids", [])
             m2_conditions_raw = mesh2_content.get("conditions_raw_ids", [])
-            assert len(m1_conditions_raw) == len(m2_conditions_raw), \
-                f"Mesh {mesh_id} 'conditions_raw_ids' length mismatch: {len(m1_conditions_raw)} vs {len(m2_conditions_raw)}"
-            for idx, (item1, item2) in enumerate(zip(m1_conditions_raw, m2_conditions_raw)):
-                 assert item1 == item2, \
-                    f"Mesh {mesh_id} 'conditions_raw_ids' item mismatch at index {idx}: {item1} vs {item2}"
+            assert len(m1_conditions_raw) == len(
+                m2_conditions_raw
+            ), f"Mesh {mesh_id} 'conditions_raw_ids' length mismatch: {len(m1_conditions_raw)} vs {len(m2_conditions_raw)}"
+            for idx, (item1, item2) in enumerate(
+                zip(m1_conditions_raw, m2_conditions_raw)
+            ):
+                assert (
+                    item1 == item2
+                ), f"Mesh {mesh_id} 'conditions_raw_ids' item mismatch at index {idx}: {item1} vs {item2}"
+
 
 # Helper function for detailed recursive comparison
 def assert_mesh_data_equal(data1, data2, tol=1e-7):
@@ -822,37 +856,57 @@ def assert_mesh_data_equal(data1, data2, tol=1e-7):
     Recursively asserts equality for mesh data structures (dictionaries, lists,
     numpy arrays, strings, numbers). Handles np.nan comparison for floats.
     """
-    assert type(data1) == type(data2), f"Type mismatch: {type(data1)} vs {type(data2)} for data1={data1}, data2={data2}"
+    assert type(data1) == type(
+        data2
+    ), f"Type mismatch: {type(data1)} vs {type(data2)} for data1={data1}, data2={data2}"
 
     if isinstance(data1, dict):
-        assert sorted(data1.keys()) == sorted(data2.keys()), \
-            f"Keys mismatch: {sorted(data1.keys())} vs {sorted(data2.keys())}"
+        assert sorted(data1.keys()) == sorted(
+            data2.keys()
+        ), f"Keys mismatch: {sorted(data1.keys())} vs {sorted(data2.keys())}"
         for k in data1:
             assert_mesh_data_equal(data1[k], data2[k], tol=tol)
     elif isinstance(data1, (list, tuple)):
-        assert len(data1) == len(data2), \
-            f"Length mismatch for sequence: {len(data1)} vs {len(data2)}"
+        assert len(data1) == len(
+            data2
+        ), f"Length mismatch for sequence: {len(data1)} vs {len(data2)}"
         for item1, item2 in zip(data1, data2):
             assert_mesh_data_equal(item1, item2, tol=tol)
     elif isinstance(data1, np.ndarray):
-        if np.issubdtype(data1.dtype, np.floating) or \
-           (data1.dtype == object and any(isinstance(x, np.floating) for x in data1.flatten())) or \
-           (data2.dtype == object and any(isinstance(x, np.floating) for x in data2.flatten())): # check for object arrays with floats
-            np.testing.assert_allclose(data1.astype(float) if data1.dtype==object else data1,
-                                       data2.astype(float) if data2.dtype==object else data2,
-                                       atol=tol, rtol=tol, equal_nan=True)
+        if (
+            np.issubdtype(data1.dtype, np.floating)
+            or (
+                data1.dtype == object
+                and any(isinstance(x, np.floating) for x in data1.flatten())
+            )
+            or (
+                data2.dtype == object
+                and any(isinstance(x, np.floating) for x in data2.flatten())
+            )
+        ):  # check for object arrays with floats
+            np.testing.assert_allclose(
+                data1.astype(float) if data1.dtype == object else data1,
+                data2.astype(float) if data2.dtype == object else data2,
+                atol=tol,
+                rtol=tol,
+                equal_nan=True,
+            )
         else:
             np.testing.assert_array_equal(data1, data2)
     elif isinstance(data1, (float, np.floating)):
         if np.isnan(data1) and np.isnan(data2):
             pass  # Both are NaN, consider them equal for this purpose
         else:
-            assert pytest.approx(data1, abs=tol) == data2, \
-                f"Float mismatch: {data1} vs {data2}"
-    elif isinstance(data1, str) and (data1 == ".TRUE." or data1 == ".FALSE."): # Kratos bool style
+            assert (
+                pytest.approx(data1, abs=tol) == data2
+            ), f"Float mismatch: {data1} vs {data2}"
+    elif isinstance(data1, str) and (
+        data1 == ".TRUE." or data1 == ".FALSE."
+    ):  # Kratos bool style
         assert data1 == data2, f"Kratos bool mismatch: {data1} vs {data2}"
-    else: # int, str, bool, etc.
+    else:  # int, str, bool, etc.
         assert data1 == data2, f"Value mismatch: {data1} vs {data2}"
+
 
 msh_mesh = """$MeshFormat
 4.1 0 8
@@ -1249,31 +1303,38 @@ Begin SubModelPart Fluid
     End SubModelPartConditions
 End SubModelPart
 
-""".split(
-    "\n"
-)
+""".split("\n")
 
 
 # Path to the new test file for comprehensive geometry reading
-GEOMETRIES_READ_TEST_FILE = pathlib.Path(__file__).parent / "input" / "mdpa" / "test_geometries_read.mdpa"
-GEOMETRIES_MINIMAL_TEST_FILE = pathlib.Path(__file__).parent / "input" / "mdpa" / "test_geometries_minimal.mdpa"
+GEOMETRIES_READ_TEST_FILE = (
+    pathlib.Path(__file__).parent / "input" / "mdpa" / "test_geometries_read.mdpa"
+)
+GEOMETRIES_MINIMAL_TEST_FILE = (
+    pathlib.Path(__file__).parent / "input" / "mdpa" / "test_geometries_minimal.mdpa"
+)
+
 
 def test_read_geometries():
     """Test reading a .mdpa file with various Geometries blocks."""
     mesh = meshio.read(GEOMETRIES_READ_TEST_FILE)
 
     # Check points
-    expected_points = np.array([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [2.0, 0.0, 0.0],
-        [2.0, 1.0, 0.0]
-    ])
+    expected_points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+        ]
+    )
     np.testing.assert_allclose(mesh.points, expected_points, atol=1e-15)
 
-    assert hasattr(mesh, 'geometries_block'), "Mesh object should have 'geometries_block' attribute."
+    assert hasattr(
+        mesh, "geometries_block"
+    ), "Mesh object should have 'geometries_block' attribute."
     assert mesh.geometries_block is not None, "'geometries_block' should not be None."
     # Expected blocks: Point3D, Line3D2, Triangle3D3, Quadrilateral3D4
     # These will be mapped to "vertex", "line", "triangle", "quad"
@@ -1285,27 +1346,30 @@ def test_read_geometries():
     # Check Point3D block (mapped to "vertex")
     assert "vertex" in geom_blocks_by_type
     vertex_block = geom_blocks_by_type["vertex"]
-    expected_vertex_data = np.array([[0], [1]], dtype=int) # Nodes 1 and 2 (0-indexed)
+    expected_vertex_data = np.array([[0], [1]], dtype=int)  # Nodes 1 and 2 (0-indexed)
     np.testing.assert_array_equal(vertex_block.data, expected_vertex_data)
 
     # Check Line3D2 block (mapped to "line")
     assert "line" in geom_blocks_by_type
     line_block = geom_blocks_by_type["line"]
-    expected_line_data = np.array([[0, 1], [2, 3], [4, 5]], dtype=int) # Nodes (1,2), (3,4), (5,6)
+    expected_line_data = np.array(
+        [[0, 1], [2, 3], [4, 5]], dtype=int
+    )  # Nodes (1,2), (3,4), (5,6)
     np.testing.assert_array_equal(line_block.data, expected_line_data)
 
     # Check Triangle3D3 block (mapped to "triangle")
     assert "triangle" in geom_blocks_by_type
     tri_block = geom_blocks_by_type["triangle"]
-    expected_tri_data = np.array([[0, 1, 2], [0, 2, 3]], dtype=int) # Nodes (1,2,3), (1,3,4)
+    expected_tri_data = np.array(
+        [[0, 1, 2], [0, 2, 3]], dtype=int
+    )  # Nodes (1,2,3), (1,3,4)
     np.testing.assert_array_equal(tri_block.data, expected_tri_data)
 
     # Check Quadrilateral3D4 block (mapped to "quad")
     assert "quad" in geom_blocks_by_type
     quad_block = geom_blocks_by_type["quad"]
-    expected_quad_data = np.array([[0, 1, 5, 4]], dtype=int) # Nodes (1,2,6,5)
+    expected_quad_data = np.array([[0, 1, 5, 4]], dtype=int)  # Nodes (1,2,6,5)
     np.testing.assert_array_equal(quad_block.data, expected_quad_data)
-
 
     # Verify mdpa_geometry_ids_info
     assert "mdpa_geometry_ids_info" in mesh.misc_data
@@ -1313,13 +1377,18 @@ def test_read_geometries():
     geom_ids_info_set = set(geom_ids_info)
 
     expected_ids_info = {
-        (101, "vertex", 0), (102, "vertex", 1),         # Points
-        (201, "line", 0), (202, "line", 1), (203, "line", 2), # Lines
-        (301, "triangle", 0), (302, "triangle", 1),     # Triangles
-        (401, "quad", 0)                                # Quads
+        (101, "vertex", 0),
+        (102, "vertex", 1),  # Points
+        (201, "line", 0),
+        (202, "line", 1),
+        (203, "line", 2),  # Lines
+        (301, "triangle", 0),
+        (302, "triangle", 1),  # Triangles
+        (401, "quad", 0),  # Quads
     }
-    assert geom_ids_info_set == expected_ids_info, \
-        f"Mismatch in mdpa_geometry_ids_info. Got {geom_ids_info_set}, expected {expected_ids_info}"
+    assert (
+        geom_ids_info_set == expected_ids_info
+    ), f"Mismatch in mdpa_geometry_ids_info. Got {geom_ids_info_set}, expected {expected_ids_info}"
 
     # Ensure no regular elements were read as this file only has geometries in element-like blocks
     assert not mesh.cells
@@ -1338,12 +1407,16 @@ def test_roundtrip_geometries_comprehensive(tmp_path):
     # Compare points
     np.testing.assert_allclose(mesh1.points, mesh2.points, atol=1e-15)
 
-    assert hasattr(mesh2, 'geometries_block') and mesh2.geometries_block is not None
+    assert hasattr(mesh2, "geometries_block") and mesh2.geometries_block is not None
     assert len(mesh1.geometries_block) == len(mesh2.geometries_block)
 
     # Sort blocks by type for comparison, as order might change due to dict iteration in writer/reader
-    mesh1_geoms_sorted = sorted(mesh1.geometries_block, key=lambda b: (b.type, b.data.shape[0]))
-    mesh2_geoms_sorted = sorted(mesh2.geometries_block, key=lambda b: (b.type, b.data.shape[0]))
+    mesh1_geoms_sorted = sorted(
+        mesh1.geometries_block, key=lambda b: (b.type, b.data.shape[0])
+    )
+    mesh2_geoms_sorted = sorted(
+        mesh2.geometries_block, key=lambda b: (b.type, b.data.shape[0])
+    )
 
     for block1, block2 in zip(mesh1_geoms_sorted, mesh2_geoms_sorted):
         assert block1.type == block2.type
@@ -1370,12 +1443,16 @@ def test_roundtrip_geometries_minimal(tmp_path):
     np.testing.assert_allclose(mesh1.points, mesh2.points, atol=1e-15)
 
     # Compare geometries_block
-    assert hasattr(mesh2, 'geometries_block') and mesh2.geometries_block is not None
+    assert hasattr(mesh2, "geometries_block") and mesh2.geometries_block is not None
     assert len(mesh1.geometries_block) == len(mesh2.geometries_block)
 
     # Sort blocks by type for comparison
-    mesh1_geoms_sorted = sorted(mesh1.geometries_block, key=lambda b: (b.type, b.data.shape[0]))
-    mesh2_geoms_sorted = sorted(mesh2.geometries_block, key=lambda b: (b.type, b.data.shape[0]))
+    mesh1_geoms_sorted = sorted(
+        mesh1.geometries_block, key=lambda b: (b.type, b.data.shape[0])
+    )
+    mesh2_geoms_sorted = sorted(
+        mesh2.geometries_block, key=lambda b: (b.type, b.data.shape[0])
+    )
 
     for block1, block2 in zip(mesh1_geoms_sorted, mesh2_geoms_sorted):
         assert block1.type == block2.type
@@ -1394,18 +1471,21 @@ def test_roundtrip_geometries_minimal(tmp_path):
 
 def test_write_manual_geometries(tmp_path):
     """Test writing manually created geometries to a .mdpa file."""
-    points = np.array([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [2.0, 1.0, 0.0] # Extra node for a line
-    ], dtype=float)
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [2.0, 1.0, 0.0],  # Extra node for a line
+        ],
+        dtype=float,
+    )
 
     # Case 1: No explicit IDs provided, writer should assign sequentially
     geometries1 = [
         meshio.CellBlock("triangle", np.array([[0, 1, 2]])),
-        meshio.CellBlock("line", np.array([[0, 3], [1,4]]))
+        meshio.CellBlock("line", np.array([[0, 3], [1, 4]])),
     ]
     mesh1 = meshio.Mesh(points, [])
     mesh1.geometries_block = geometries1
@@ -1415,16 +1495,21 @@ def test_write_manual_geometries(tmp_path):
     meshio.mdpa.write(file1_path, mesh1)
     mesh1_readback = meshio.mdpa.read(file1_path)
 
-    assert hasattr(mesh1_readback, 'geometries_block') and mesh1_readback.geometries_block is not None
+    assert (
+        hasattr(mesh1_readback, "geometries_block")
+        and mesh1_readback.geometries_block is not None
+    )
     assert len(mesh1_readback.geometries_block) == 2
 
     # Sort blocks by type for comparison
     m1rb_geoms_sorted = sorted(mesh1_readback.geometries_block, key=lambda b: b.type)
 
-    assert m1rb_geoms_sorted[0].type == "line" # line comes before triangle alphabetically
-    np.testing.assert_array_equal(m1rb_geoms_sorted[0].data, np.array([[0,3],[1,4]]))
+    assert (
+        m1rb_geoms_sorted[0].type == "line"
+    )  # line comes before triangle alphabetically
+    np.testing.assert_array_equal(m1rb_geoms_sorted[0].data, np.array([[0, 3], [1, 4]]))
     assert m1rb_geoms_sorted[1].type == "triangle"
-    np.testing.assert_array_equal(m1rb_geoms_sorted[1].data, np.array([[0,1,2]]))
+    np.testing.assert_array_equal(m1rb_geoms_sorted[1].data, np.array([[0, 1, 2]]))
 
     # Check assigned IDs (should be sequential as no info was provided)
     # The writer warns about missing IDs and assigns them. Reader populates from file.
@@ -1434,27 +1519,24 @@ def test_write_manual_geometries(tmp_path):
     # Order of blocks in mesh.geometries_block: triangle, then line.
     # So, triangle ID 1. Line IDs 2, 3.
     expected_ids_info1 = {
-        (1, "triangle", 0), # First geometry entity overall
-        (2, "line", 0),     # Second geometry entity overall
-        (3, "line", 1)      # Third geometry entity overall
+        (1, "triangle", 0),  # First geometry entity overall
+        (2, "line", 0),  # Second geometry entity overall
+        (3, "line", 1),  # Third geometry entity overall
     }
     assert "mdpa_geometry_ids_info" in mesh1_readback.misc_data
     assert set(mesh1_readback.misc_data["mdpa_geometry_ids_info"]) == expected_ids_info1
 
-
     # Case 2: Explicit IDs provided via misc_data
     geometries2 = [
-        meshio.CellBlock("quad", np.array([[0,1,2,3]])),
-        meshio.CellBlock("vertex", np.array([[4]]))
+        meshio.CellBlock("quad", np.array([[0, 1, 2, 3]])),
+        meshio.CellBlock("vertex", np.array([[4]])),
     ]
-    # Note: MDPA types Point2D/Point3D map to 'vertex'. Ensure _meshio_to_mdpa_type has 'vertex'.
-    # It does: "Point2D": "vertex", "Point3D": "vertex"
-    # And _meshio_to_mdpa_type has "vertex": "Point3D" (or "Point2D" depending on dict creation order)
+    # Note: MDPA types Point2D/Point3D map to 'vertex'.
+    # Ensure mapping dicts have 'vertex'.
+    # They do: "Point2D": "vertex", "Point3D": "vertex" in _kratos_geometries_to_meshio_type
+    # And _meshio_to_kratos_geometry_type has "vertex": "Point3D" (or "Point2D")
 
-    manual_ids_info = [
-        (55, "quad", 0),
-        (77, "vertex", 0)
-    ]
+    manual_ids_info = [(55, "quad", 0), (77, "vertex", 0)]
     mesh2 = meshio.Mesh(points, [])
     mesh2.geometries_block = geometries2
     mesh2.misc_data = {"mdpa_geometry_ids_info": manual_ids_info}
@@ -1463,36 +1545,48 @@ def test_write_manual_geometries(tmp_path):
     meshio.mdpa.write(file2_path, mesh2)
     mesh2_readback = meshio.mdpa.read(file2_path)
 
-    assert hasattr(mesh2_readback, 'geometries_block') and mesh2_readback.geometries_block is not None
+    assert (
+        hasattr(mesh2_readback, "geometries_block")
+        and mesh2_readback.geometries_block is not None
+    )
     # Order of blocks might depend on internal dict iteration if not sorted before writing cellblocks.
     # The writer iterates mesh.geometries_block as provided.
 
     m2rb_geoms_sorted = sorted(mesh2_readback.geometries_block, key=lambda b: b.type)
 
     assert m2rb_geoms_sorted[0].type == "quad"
-    np.testing.assert_array_equal(m2rb_geoms_sorted[0].data, np.array([[0,1,2,3]]))
+    np.testing.assert_array_equal(m2rb_geoms_sorted[0].data, np.array([[0, 1, 2, 3]]))
     assert m2rb_geoms_sorted[1].type == "vertex"
     np.testing.assert_array_equal(m2rb_geoms_sorted[1].data, np.array([[4]]))
 
     assert "mdpa_geometry_ids_info" in mesh2_readback.misc_data
-    assert set(mesh2_readback.misc_data["mdpa_geometry_ids_info"]) == set(manual_ids_info)
+    assert set(mesh2_readback.misc_data["mdpa_geometry_ids_info"]) == set(
+        manual_ids_info
+    )
 
 
 # Helper for deep comparison of misc_data like structures
 def assert_misc_data_equal(data1, data2, path=""):
-    assert type(data1) == type(data2), f"Type mismatch at {path}: {type(data1)} vs {type(data2)}"
+    assert type(data1) == type(
+        data2
+    ), f"Type mismatch at {path}: {type(data1)} vs {type(data2)}"
     if isinstance(data1, dict):
-        assert sorted(data1.keys()) == sorted(data2.keys()), \
-            f"Keys mismatch at {path}: {sorted(data1.keys())} vs {sorted(data2.keys())}"
+        assert sorted(data1.keys()) == sorted(
+            data2.keys()
+        ), f"Keys mismatch at {path}: {sorted(data1.keys())} vs {sorted(data2.keys())}"
         for k in data1:
             assert_misc_data_equal(data1[k], data2[k], path=f"{path}/{k}")
     elif isinstance(data1, list):
-        assert len(data1) == len(data2), f"Length mismatch at {path}: {len(data1)} vs {len(data2)}"
+        assert len(data1) == len(
+            data2
+        ), f"Length mismatch at {path}: {len(data1)} vs {len(data2)}"
         # Sort lists of simple types if order doesn't matter for them
         # For lists of dicts or complex structures, order usually matters or needs specific handling
         if all(isinstance(x, (int, float, str)) for x in data1):
-            assert sorted(data1) == sorted(data2), f"Sorted list content mismatch at {path}"
-        else: # For lists of dicts or other complex types, assume order matters
+            assert sorted(data1) == sorted(
+                data2
+            ), f"Sorted list content mismatch at {path}"
+        else:  # For lists of dicts or other complex types, assume order matters
             for i, (item1, item2) in enumerate(zip(data1, data2)):
                 assert_misc_data_equal(item1, item2, path=f"{path}[{i}]")
     elif isinstance(data1, np.ndarray):
@@ -1503,11 +1597,24 @@ def assert_misc_data_equal(data1, data2, path=""):
         assert data1 == data2, f"Value mismatch at {path}: {data1} vs {data2}"
 
 
-SUBMODELPARTS_HIERARCHICAL_FILE = pathlib.Path(__file__).parent / "input" / "mdpa" / "test_submodelparts_hierarchical.mdpa"
-MESH_BLOCKS_FILE = pathlib.Path(__file__).parent / "input" / "mdpa" / "test_mesh_blocks.mdpa"
-TABLES_VARIED_FILE = pathlib.Path(__file__).parent / "input" / "mdpa" / "test_tables_varied.mdpa"
-ELEMENTS_PERMUTATIONS_FILE = pathlib.Path(__file__).parent / "input" / "mdpa" / "test_elements_permutations.mdpa"
-EDGE_CASES_FILE = pathlib.Path(__file__).parent / "input" / "mdpa" / "test_edge_cases.mdpa"
+SUBMODELPARTS_HIERARCHICAL_FILE = (
+    pathlib.Path(__file__).parent
+    / "input"
+    / "mdpa"
+    / "test_submodelparts_hierarchical.mdpa"
+)
+MESH_BLOCKS_FILE = (
+    pathlib.Path(__file__).parent / "input" / "mdpa" / "test_mesh_blocks.mdpa"
+)
+TABLES_VARIED_FILE = (
+    pathlib.Path(__file__).parent / "input" / "mdpa" / "test_tables_varied.mdpa"
+)
+ELEMENTS_PERMUTATIONS_FILE = (
+    pathlib.Path(__file__).parent / "input" / "mdpa" / "test_elements_permutations.mdpa"
+)
+EDGE_CASES_FILE = (
+    pathlib.Path(__file__).parent / "input" / "mdpa" / "test_edge_cases.mdpa"
+)
 
 
 def test_roundtrip_submodelparts_hierarchical(tmp_path):
@@ -1523,8 +1630,9 @@ def test_roundtrip_submodelparts_hierarchical(tmp_path):
     assert smp_info1["SMP1"]["data"]["SMP1_DATA_FLOAT"] == 123.456
     assert smp_info1["SMP1"]["tables"] == [1]
     np.testing.assert_array_equal(smp_info1["SMP1"]["elements_raw"], np.array([1, 3]))
-    np.testing.assert_array_equal(smp_info1["SMP1/SMP1_Child1"]["nodes"], np.array([0, 3])) # 1,4 -> 0,3
-
+    np.testing.assert_array_equal(
+        smp_info1["SMP1/SMP1_Child1"]["nodes"], np.array([0, 3])
+    )  # 1,4 -> 0,3
 
     output_file = tmp_path / "roundtrip_smp_hierarchical.mdpa"
     meshio.mdpa.write(output_file, mesh1)
@@ -1539,7 +1647,9 @@ def test_roundtrip_submodelparts_hierarchical(tmp_path):
 
     assert "submodelpart_info" in mesh2.misc_data
     # Using the new helper for deep comparison
-    assert_misc_data_equal(mesh1.misc_data["submodelpart_info"], mesh2.misc_data["submodelpart_info"])
+    assert_misc_data_equal(
+        mesh1.misc_data["submodelpart_info"], mesh2.misc_data["submodelpart_info"]
+    )
 
 
 def test_roundtrip_mesh_blocks(tmp_path):
@@ -1551,22 +1661,26 @@ def test_roundtrip_mesh_blocks(tmp_path):
     meshes1 = mesh1.misc_data["meshes"]
     assert 1 in meshes1
     assert meshes1[1]["mesh_data"]["MESH_NAME"] == '"Component1_Mesh"'
-    np.testing.assert_array_equal(meshes1[1]["nodes"], np.array([0,1,2,3]))
-    assert meshes1[1]["elements_raw_ids"] == [1,2] # Check raw IDs
-    assert "conditions_raw_ids" not in meshes1[1] or not meshes1[1]["conditions_raw_ids"]
-
+    np.testing.assert_array_equal(meshes1[1]["nodes"], np.array([0, 1, 2, 3]))
+    assert meshes1[1]["elements_raw_ids"] == [1, 2]  # Check raw IDs
+    assert (
+        "conditions_raw_ids" not in meshes1[1] or not meshes1[1]["conditions_raw_ids"]
+    )
 
     assert 2 in meshes1
-    assert meshes1[2]["mesh_data"]["DESCRIPTION"] == '"Second component, conditions only"'
-    np.testing.assert_array_equal(meshes1[2]["nodes"], np.array([4,5,6]))
+    assert (
+        meshes1[2]["mesh_data"]["DESCRIPTION"] == '"Second component, conditions only"'
+    )
+    np.testing.assert_array_equal(meshes1[2]["nodes"], np.array([4, 5, 6]))
     assert "elements_raw_ids" not in meshes1[2] or not meshes1[2]["elements_raw_ids"]
-    assert meshes1[2]["conditions_raw_ids"] == [101,102]
+    assert meshes1[2]["conditions_raw_ids"] == [101, 102]
 
     assert 3 in meshes1
     assert not meshes1[3]["nodes"]
     assert "elements_raw_ids" not in meshes1[3] or not meshes1[3]["elements_raw_ids"]
-    assert "conditions_raw_ids" not in meshes1[3] or not meshes1[3]["conditions_raw_ids"]
-
+    assert (
+        "conditions_raw_ids" not in meshes1[3] or not meshes1[3]["conditions_raw_ids"]
+    )
 
     output_file = tmp_path / "roundtrip_mesh_blocks.mdpa"
     meshio.mdpa.write(output_file, mesh1)
@@ -1574,7 +1688,9 @@ def test_roundtrip_mesh_blocks(tmp_path):
 
     # Basic checks
     np.testing.assert_allclose(mesh1.points, mesh2.points, atol=1e-15)
-    assert len(mesh1.cells) == len(mesh2.cells) # Should include elements and conditions
+    assert len(mesh1.cells) == len(
+        mesh2.cells
+    )  # Should include elements and conditions
     for c1, c2 in zip(mesh1.cells, mesh2.cells):
         assert c1.type == c2.type
         np.testing.assert_array_equal(c1.data, c2.data)
@@ -1588,20 +1704,24 @@ def test_roundtrip_tables_varied(tmp_path):
     mesh1 = meshio.read(TABLES_VARIED_FILE)
 
     # Verify initial read
-    assert "table_10" in mesh1.field_data # Top-level table
+    assert "table_10" in mesh1.field_data  # Top-level table
     assert mesh1.field_data["table_10"]["variables"] == ["GLOBAL_TIME", "GLOBAL_VALUE"]
-    np.testing.assert_allclose(mesh1.field_data["table_10"]["data"], np.array([[0.0,100.0],[0.5,150.0],[1.0,200.0]]))
+    np.testing.assert_allclose(
+        mesh1.field_data["table_10"]["data"],
+        np.array([[0.0, 100.0], [0.5, 150.0], [1.0, 200.0]]),
+    )
 
     assert "properties_100" in mesh1.field_data
     props100 = mesh1.field_data["properties_100"]
-    assert "table_50" in props100 # Nested table
+    assert "table_50" in props100  # Nested table
     assert props100["table_50"]["variables"] == ["NAME_A", "NAME_B"]
-    np.testing.assert_allclose(props100["table_50"]["data"], np.array([[1.1,1.2],[2.1,2.2],[3.1,3.2]]))
+    np.testing.assert_allclose(
+        props100["table_50"]["data"], np.array([[1.1, 1.2], [2.1, 2.2], [3.1, 3.2]])
+    )
     assert props100["DENSITY"] == 2500.0
 
-    assert "properties_200" in mesh1.field_data # Property block without table
+    assert "properties_200" in mesh1.field_data  # Property block without table
     assert mesh1.field_data["properties_200"]["YOUNG_MODULUS"] == 2.0e11
-
 
     output_file = tmp_path / "roundtrip_tables_varied.mdpa"
     meshio.mdpa.write(output_file, mesh1)
@@ -1609,7 +1729,7 @@ def test_roundtrip_tables_varied(tmp_path):
 
     # Basic checks
     np.testing.assert_allclose(mesh1.points, mesh2.points, atol=1e-15)
-    assert len(mesh1.cells) == len(mesh2.cells) # Should be no cells
+    assert len(mesh1.cells) == len(mesh2.cells)  # Should be no cells
 
     # Compare field_data which contains tables and properties
     assert_misc_data_equal(mesh1.field_data, mesh2.field_data)
@@ -1620,7 +1740,7 @@ def test_elements_permutations_read():
     mesh = meshio.read(ELEMENTS_PERMUTATIONS_FILE)
 
     assert len(mesh.points) == 27
-    assert len(mesh.cells) == 2 # One H20, one H27
+    assert len(mesh.cells) == 2  # One H20, one H27
 
     h20_block = None
     h27_block = None
@@ -1679,11 +1799,10 @@ def test_read_edge_cases(tmp_path):
     mesh_empty = meshio.read(empty_file)
     assert len(mesh_empty.points) == 0
     assert not mesh_empty.cells
-    assert not mesh_empty.geometries_block # Check geometries too
-    assert not mesh_empty.field_data # ModelPartData should be empty
+    assert not mesh_empty.geometries_block  # Check geometries too
+    assert not mesh_empty.field_data  # ModelPartData should be empty
     assert not mesh_empty.point_data
     assert not mesh_empty.cell_data
-
 
     # Case 2: File with only Nodes
     nodes_only_content = "Begin Nodes\n1 0 0 0\n2 1 1 1\nEnd Nodes\n"
@@ -1691,10 +1810,9 @@ def test_read_edge_cases(tmp_path):
     nodes_only_file.write_text(nodes_only_content)
     mesh_nodes_only = meshio.read(nodes_only_file)
     assert len(mesh_nodes_only.points) == 2
-    np.testing.assert_allclose(mesh_nodes_only.points, np.array([[0,0,0],[1,1,1]]))
+    np.testing.assert_allclose(mesh_nodes_only.points, np.array([[0, 0, 0], [1, 1, 1]]))
     assert not mesh_nodes_only.cells
     assert not mesh_nodes_only.geometries_block
-
 
     # Case 3: Elements without explicit Properties block (should use/create Properties 0)
     # Content from EDGE_CASES_FILE covers this and more.
@@ -1702,7 +1820,7 @@ def test_read_edge_cases(tmp_path):
 
     # Check nodes from EDGE_CASES_FILE
     assert len(mesh_edges.points) == 2
-    np.testing.assert_allclose(mesh_edges.points, np.array([[0,0,0],[1,0,0]]))
+    np.testing.assert_allclose(mesh_edges.points, np.array([[0, 0, 0], [1, 0, 0]]))
 
     # Check elements and properties
     # Expected: Triangle2D3 (prop 10), Line2D2 (prop 0)
@@ -1717,23 +1835,24 @@ def test_read_edge_cases(tmp_path):
 
     assert tri_block is not None and tri_block.type == "triangle"
     assert len(tri_block.data) == 1
-    np.testing.assert_array_equal(tri_block.data[0], np.array([0,1,0])) # Nodes 1,2,1
+    np.testing.assert_array_equal(tri_block.data[0], np.array([0, 1, 0]))  # Nodes 1,2,1
     assert "gmsh:physical" in mesh_edges.cell_data["triangle"]
     assert mesh_edges.cell_data["triangle"]["gmsh:physical"][0] == 10
 
     assert line_block is not None and line_block.type == "line"
     assert len(line_block.data) == 1
-    np.testing.assert_array_equal(line_block.data[0], np.array([0,1])) # Nodes 1,2
+    np.testing.assert_array_equal(line_block.data[0], np.array([0, 1]))  # Nodes 1,2
     assert "gmsh:physical" in mesh_edges.cell_data["line"]
     # If Properties 0 is not in the file, it's assumed.
     # The writer creates "Properties 0" if no properties are written.
     # The reader stores the property ID read (0 in this case).
     assert mesh_edges.cell_data["line"]["gmsh:physical"][0] == 0
 
-
     # Check NodalData TEST_SCALAR
     assert "TEST_SCALAR" in mesh_edges.point_data
-    np.testing.assert_allclose(mesh_edges.point_data["TEST_SCALAR"], np.array([100.5, 200.5]))
+    np.testing.assert_allclose(
+        mesh_edges.point_data["TEST_SCALAR"], np.array([100.5, 200.5])
+    )
 
     # Check NodalData MALFORMED_NODAL_DATA_LINE_TEST
     # Expect warnings for this block during read.
@@ -1747,13 +1866,15 @@ def test_read_edge_cases(tmp_path):
     # For now, just check if the key exists. A more detailed check would require capturing warnings.
     assert "MALFORMED_NODAL_DATA_LINE_TEST" in mesh_edges.point_data
     malformed_data = mesh_edges.point_data["MALFORMED_NODAL_DATA_LINE_TEST"]
-    assert malformed_data.shape == (2,2) # 2 nodes, 2 components
+    assert malformed_data.shape == (2, 2)  # 2 nodes, 2 components
     np.testing.assert_allclose(malformed_data[0], np.array([1.0, 2.0]))
-    assert np.all(np.isnan(malformed_data[1])) # Node 2 data should be NaN due to malformed line for ID 3 (which doesn't exist)
-                                               # and ID "WRONG_ID_TYPE" being skipped.
-                                               # Actually, ID 3 refers to point index 2, which is out of bounds for 2 points.
-                                               # The line `3 4.0 5.0 6.0` will be skipped due to invalid node ID.
-                                               # So, only node 1 has data. Node 2 (index 1) will be nan.
+    assert np.all(
+        np.isnan(malformed_data[1])
+    )  # Node 2 data should be NaN due to malformed line for ID 3 (which doesn't exist)
+    # and ID "WRONG_ID_TYPE" being skipped.
+    # Actually, ID 3 refers to point index 2, which is out of bounds for 2 points.
+    # The line `3 4.0 5.0 6.0` will be skipped due to invalid node ID.
+    # So, only node 1 has data. Node 2 (index 1) will be nan.
 
 
 def test_empty_file_write_read(tmp_path):
@@ -1772,9 +1893,11 @@ def test_empty_file_write_read(tmp_path):
     # Let's check if it's empty or only contains the default properties_0
     if read_back_mesh.field_data:
         assert list(read_back_mesh.field_data.keys()) == ["properties_0"]
-        assert not read_back_mesh.field_data["properties_0"] # properties_0 should be an empty dict
+        assert not read_back_mesh.field_data[
+            "properties_0"
+        ]  # properties_0 should be an empty dict
     else:
-        assert not read_back_mesh.field_data # Completely empty is also fine
+        assert not read_back_mesh.field_data  # Completely empty is also fine
 
     assert not read_back_mesh.point_data
     assert not read_back_mesh.cell_data
@@ -1782,10 +1905,15 @@ def test_empty_file_write_read(tmp_path):
     if read_back_mesh.misc_data:
         for key, value in read_back_mesh.misc_data.items():
             if isinstance(value, list):
-                assert not value, f"misc_data field {key} should be an empty list for empty mesh."
+                assert (
+                    not value
+                ), f"misc_data field {key} should be an empty list for empty mesh."
             elif isinstance(value, dict):
-                assert not value, f"misc_data field {key} should be an empty dict for empty mesh."
+                assert (
+                    not value
+                ), f"misc_data field {key} should be an empty dict for empty mesh."
             # Add other type checks if necessary
+
 
 @pytest.mark.parametrize(
     "filename, ref_num_points, ref_cells_info",
