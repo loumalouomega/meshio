@@ -1,0 +1,27 @@
+Begin ModelPartData
+    INFO "Test for Varied Table Definitions"
+End ModelPartData
+
+Begin Properties 100
+    DENSITY 2500.0
+    CONDUCTIVITY 2.0
+    Begin Table 50 NAME_A NAME_B // Table nested in Properties 100
+        1.1 1.2
+        2.1 2.2
+        3.1 3.2
+    End Table
+End Properties
+
+Begin Properties 200 // Another property block, no table
+    YOUNG_MODULUS 2.0e11
+End Properties
+
+Begin Table 10 GLOBAL_TIME GLOBAL_VALUE // Top-level Table
+    0.0 100.0
+    0.5 150.0
+    1.0 200.0
+End Table
+
+Begin Nodes // Minimal nodes to make it a valid mesh file
+    1 0.0 0.0 0.0
+End Nodes

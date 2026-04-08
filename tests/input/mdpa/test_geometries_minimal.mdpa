@@ -1,0 +1,14 @@
+Begin ModelPartData
+// Minimal test file for MDPA geometries roundtrip
+End ModelPartData
+
+Begin Nodes
+  1 0.0 0.0 0.0
+  2 1.0 0.0 0.0
+  3 2.0 0.0 0.0
+End Nodes
+
+Begin Geometries Line3D2
+  11 1 2
+  12 2 3
+End Geometries
