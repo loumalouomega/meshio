@@ -574,34 +574,47 @@ def _prepare_cells(cells_list_of_tuples, cell_tags_dict):
     final_cells_for_mesh = []
     # Kratos to VTK node index permutations for hexahedron20 and hexahedron27 elements.
     # These are applied to convert MDPA's Kratos-specific node ordering to meshio's VTK-based ordering.
-    kratos_to_vtk_h20_perm = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 13, 14, 15], dtype=int)
-    # The H27 permutation assumes Kratos nodes 0-7 are corners, 8-19 edge midsides (like H20),
-    # 20-25 face centers, and 26 the volume center. VTK order for face centers might differ.
-    # This specific permutation is based on a common interpretation.
-    kratos_to_vtk_h27_perm = np.array([
-        0, 1, 2, 3, 4, 5, 6, 7,  # Corners
-        8, 11, 10, 9,            # Bottom face edges (Kratos nodes 8,9,10,11)
-        16, 19, 18, 17,          # Vertical edges (Kratos nodes 12,13,14,15)
-        12, 15, 14, 13,          # Top face edges (Kratos nodes 16,17,18,19)
-        20, 22, 24, 21, 23, 25,  # Face centers (Kratos nodes 20-25) - VTK order: X-, Y-, Z-, X+, Y+, Z+
-        26                       # Volume center (Kratos node 26)
-    ], dtype=int)
+    # We define the Kratos node IDs as they appear in a standard MDPA file for these elements,
+    # and use argsort to find the permutation to meshio (VTK) order.
+    h20_kratos_nodes = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 13, 14, 15], dtype=int)
+    kratos_to_vtk_h20_perm = np.argsort(h20_kratos_nodes)
+
+    h27_kratos_nodes = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 15, 14, 13, 20, 23, 21, 24, 22, 25, 26], dtype=int)
+    kratos_to_vtk_h27_perm = np.argsort(h27_kratos_nodes)
 
     for cell_type_str, cell_data_list_of_lists in cells_list_of_tuples:
-        num_expected_nodes = num_nodes_per_cell.get(cell_type_str, 0)
-        cell_array = np.array(cell_data_list_of_lists, dtype=int) if cell_data_list_of_lists else np.empty((0, num_expected_nodes), dtype=int)
+        if not cell_data_list_of_lists:
+            num_expected_nodes = num_nodes_per_cell.get(cell_type_str, 0)
+            final_cells_for_mesh.append(
+                CellBlock(cell_type_str, np.empty((0, num_expected_nodes), dtype=int))
+            )
+            continue
 
-        if cell_array.size > 0: # Only permute if there's data
-            if cell_type_str == "hexahedron20" and cell_array.shape[1] == 20:
+        # Group data by number of nodes to handle inhomogeneous blocks
+        from collections import defaultdict
+
+        by_len = defaultdict(list)
+        for sublist in cell_data_list_of_lists:
+            by_len[len(sublist)].append(sublist)
+
+        for nodes_len, sublists in by_len.items():
+            cell_array = np.array(sublists, dtype=int)
+            # Try to find a matching meshio type for this number of nodes
+            actual_type = cell_type_str
+            if nodes_len != num_nodes_per_cell.get(cell_type_str, -1):
+                # Look up type by node count
+                for mtype, ncount in num_nodes_per_cell.items():
+                    if ncount == nodes_len:
+                        actual_type = mtype
+                        break
+
+            if actual_type == "hexahedron20" and cell_array.shape[1] == 20:
                 cell_array = cell_array[:, kratos_to_vtk_h20_perm]
-            elif cell_type_str == "hexahedron27" and cell_array.shape[1] == 27:
-                # Ensure kratos_to_vtk_h27_perm is correctly defined if this path is hit by tests
-                if len(kratos_to_vtk_h27_perm) == 27: # Basic check
-                     cell_array = cell_array[:, kratos_to_vtk_h27_perm]
-                else:
-                    warn(f"Kratos H27 permutation array is not of length 27. Skipping permutation for {cell_type_str}.")
+            elif actual_type == "hexahedron27" and cell_array.shape[1] == 27:
+                if len(kratos_to_vtk_h27_perm) == 27:
+                    cell_array = cell_array[:, kratos_to_vtk_h27_perm]
 
-        final_cells_for_mesh.append(CellBlock(cell_type_str, cell_array))
+            final_cells_for_mesh.append(CellBlock(actual_type, cell_array))
     return final_cells_for_mesh, output_cell_tags_meshio, has_additional_tag_data
 
 def _parse_submodelpart_entity_list(f, end_block_str):
@@ -631,9 +644,10 @@ def _parse_submodelpart_entity_list(f, end_block_str):
         line_raw = f.readline().decode()
         if not line_raw: warn(f"EOF encountered while expecting {end_block_str}."); break
         stripped_line = line_raw.strip()
-        if stripped_line == end_block_str: break
-        if not stripped_line or stripped_line.startswith("//"): continue
-        try: entity_ids.append(int(stripped_line.split("//",1)[0].strip()))
+        token = stripped_line.split("//", 1)[0].strip()
+        if token == end_block_str: break
+        if not token: continue
+        try: entity_ids.append(int(token))
         except ValueError: warn(f"Non-integer ID in {end_block_str.replace('End ','')} list: {stripped_line}")
     return np.array(entity_ids, dtype=int)
 
@@ -785,23 +799,27 @@ def read_buffer(f):
             if not smp_name_on_line: warn(f"SubModelPart name is empty. Skipping: {environ}"); consume_block(f, "End SubModelPart"); continue
             active_submodelpart_stack.append(smp_name_on_line)
             current_smp_name_hierarchical = "/".join(active_submodelpart_stack)
+            # print(f"DEBUG: Begin SMP, stack: {active_submodelpart_stack}, hierarchical: {current_smp_name_hierarchical}")
             if "submodelpart_info" not in misc_data: misc_data["submodelpart_info"] = {}
             if current_smp_name_hierarchical not in misc_data["submodelpart_info"]:
                 misc_data["submodelpart_info"][current_smp_name_hierarchical] = {"data": {}, "tables": [], "nodes": np.array([],dtype=int), "elements_raw": np.array([],dtype=int), "conditions_raw": np.array([],dtype=int)}
-        elif environ == "End SubModelPart":
-            if active_submodelpart_stack: active_submodelpart_stack.pop()
-            else: warn("Found End SubModelPart without a corresponding Begin.")
+        elif environ.startswith("End SubModelPart"):
+            token = environ.split("//", 1)[0].strip()
+            if token == "End SubModelPart":
+                if active_submodelpart_stack:
+                    active_submodelpart_stack.pop()
+                    current_smp_name_hierarchical = "/".join(active_submodelpart_stack) if active_submodelpart_stack else None
+                else: warn("Found End SubModelPart without a corresponding Begin.")
         elif environ.startswith("Begin SubModelPartData"):
             if not current_smp_name_hierarchical: warn("SubModelPartData found outside a SubModelPart. Skipping."); consume_block(f, "End SubModelPartData"); continue
             smp_data_dict = misc_data["submodelpart_info"][current_smp_name_hierarchical]["data"]
             while True:
                 line = f.readline().decode(); stripped_line = line.strip()
                 if not line: warn(f"EOF in SubModelPartData for {current_smp_name_hierarchical}."); break
-                if stripped_line == "End SubModelPartData": break
-                if not stripped_line or stripped_line.startswith("//"): continue
-                line_content_for_smpdata = stripped_line.split("//", 1)[0].strip()
-                if not line_content_for_smpdata: continue
-                parts = line_content_for_smpdata.split(None, 1)
+                token = stripped_line.split("//", 1)[0].strip()
+                if token == "End SubModelPartData": break
+                if not token: continue
+                parts = token.split(None, 1)
                 if len(parts) == 2:
                     key, val_str = parts
                     try: value = float(val_str); value = int(value) if value.is_integer() else value
@@ -876,10 +894,10 @@ def read_buffer(f):
     misc_data["reader_condition_ids_info"] = mdpa_condition_ids_info
 
     # if we have geometries_list_of_tuples, then we prepare them for meshio
+    final_geometries_for_mesh = None
     if geometries_list_of_tuples:
         # Using _prepare_cells for geometries as well, assuming similar structure
         final_geometries_for_mesh, _, _ = _prepare_cells(geometries_list_of_tuples, {}) # No tags for geometries for now
-        mesh.geometries_block = final_geometries_for_mesh # Store as a new attribute
         misc_data["mdpa_geometry_ids_info"] = mdpa_geometry_ids_info
 
     final_cells_for_mesh, processed_cell_tags, has_additional_tag_data = _prepare_cells(cells_list_of_tuples, cell_tags_temp)
@@ -900,6 +918,7 @@ def read_buffer(f):
     mesh_obj = Mesh(points, final_cells_for_mesh, point_data=point_data, cell_data={}, field_data=field_data)
     mesh_obj.cell_data = final_cell_data_for_mesh
     mesh_obj.misc_data = misc_data
+    mesh_obj.geometries_block = final_geometries_for_mesh
     return mesh_obj
 
 def consume_block(f, end_block_str):
@@ -920,7 +939,8 @@ def consume_block(f, end_block_str):
     """
     while True:
         line = f.readline().decode()
-        if not line or line.strip() == end_block_str: break
+        if not line: break
+        if line.strip().split("//", 1)[0].strip() == end_block_str: break
 
 def _write_nodes(fh, points, float_fmt, binary=False):
     """
@@ -1067,55 +1087,6 @@ def _compute_blocks_name(mesh, cells_to_iterate):
     return bname
 
 def _write_elements_and_conditions(fh, mesh, cells_to_write):
-    mdpa_written_entity_ids = {}
-    bname = [{} for _ in cells_to_iterate]
-    has_gmsh_physical = False
-    if mesh.cell_data:
-        for cell_type_data_dict in mesh.cell_data.values():
-            if isinstance(cell_type_data_dict, dict) and "gmsh:physical" in cell_type_data_dict and \
-               isinstance(cell_type_data_dict["gmsh:physical"], np.ndarray) and cell_type_data_dict["gmsh:physical"].size > 0:
-                has_gmsh_physical = True; break
-    if not has_gmsh_physical:
-         for i, cell_block in enumerate(cells_to_iterate):
-            mdpa_type_name = _meshio_to_mdpa_type.get(cell_block.type)
-            cell_dim = local_dimension_types.get(mdpa_type_name, 3)
-            entity = "Elements" if cell_dim == dim else "Conditions"
-            bname[i] = {"part_name": f"DefaultPart{i}", "entity": entity}
-         return bname
-    for ib, cell_block in enumerate(cells_to_iterate):
-        cell_type_str = cell_block.type
-        physical_tags_for_block = mesh.cell_data.get(cell_type_str, {}).get("gmsh:physical")
-        if physical_tags_for_block is None or physical_tags_for_block.size == 0:
-            if not bname[ib]:
-                mdpa_type_name = _meshio_to_mdpa_type.get(cell_type_str)
-                cell_dim = local_dimension_types.get(mdpa_type_name, 3)
-                entity = "Elements" if cell_dim == dim else "Conditions"
-                bname[ib] = {"part_name": f"DefaultPart_Block{ib}", "entity": entity}
-            continue
-        pid = int(physical_tags_for_block[0]) if len(physical_tags_for_block) > 0 else None
-        if pid is not None and pid in pid_to_pname and pid in mesh.field_data and \
-           isinstance(mesh.field_data[pid], (list, tuple)) and len(mesh.field_data[pid]) > 1:
-            pname = pid_to_pname[pid]; pdim = mesh.field_data[pname][1]
-            entity = "Elements" if pdim == dim else "Conditions"
-            bname[ib] = {"part_name": pname, "entity": entity}
-        else:
-            if not bname[ib]:
-                mdpa_type_name = _meshio_to_mdpa_type.get(cell_type_str)
-                cell_dim = local_dimension_types.get(mdpa_type_name, 3)
-                entity = "Elements" if cell_dim == dim else "Conditions"
-                part_name_default = f"UnnamedGroup{pid}_Block{ib}" if pid is not None else f"DefaultPart_Block{ib}"
-                bname[ib] = {"part_name": part_name_default, "entity": entity}
-    for ib_check, cell_block in enumerate(cells_to_iterate):
-        if not bname[ib_check]:
-            cell_block_type_str = cell_block.type
-            mdpa_type_name = _meshio_to_mdpa_type.get(cell_block_type_str)
-            cell_dim = local_dimension_types.get(mdpa_type_name, 3)
-            entity = "Elements" if cell_dim == dim else "Conditions"
-            bname[ib_check] = {"part_name": f"FallbackDefaultPart{ib_check}", "entity": entity}
-            warn(f"Block {ib_check} ({cell_block_type_str}) was not named by primary logic, used fallback name.")
-    return bname
-
-def _write_elements_and_conditions(fh, mesh, cells_to_write):
     """
     Writes "Elements" and "Conditions" blocks to an MDPA file stream.
 
@@ -1148,14 +1119,16 @@ def _write_elements_and_conditions(fh, mesh, cells_to_write):
     global_condition_id_counter = 1
     for ib, cell_block in enumerate(cells_to_write):
         entity_block_type = bname[ib].get("entity", "Elements")
-        part_name = bname[ib].get("part_name", f"UnnamedBlock{ib}")
         mdpa_type = _meshio_to_mdpa_type.get(cell_block.type, "UnknownType")
         line = f"Begin {entity_block_type} {mdpa_type}\n"
         fh.write(line.encode())
         for ie, node_indices_for_cell in enumerate(cell_block.data):
-            eid = 0
-            if entity_block_type == "Elements": eid = global_element_id_counter; global_element_id_counter += 1
-            else: eid = global_condition_id_counter; global_condition_id_counter += 1
+            if entity_block_type == "Elements":
+                eid = global_element_id_counter
+                global_element_id_counter += 1
+            else:
+                eid = global_condition_id_counter
+                global_condition_id_counter += 1
             mdpa_written_entity_ids[(cell_block.type, ie)] = eid
             property_id_to_write = 0  # Default property ID
 
@@ -1169,10 +1142,6 @@ def _write_elements_and_conditions(fh, mesh, cells_to_write):
                 # Check if a corresponding Properties block exists for this gmsh_tag
                 if mesh.field_data and f"properties_{gmsh_tag}" in mesh.field_data:
                     property_id_to_write = gmsh_tag
-                # Else, it remains 0, which is fine if "Properties 0" is expected or no specific properties are defined.
-                # For the test_write_from_gmsh, mdpa_mesh_ref expects "Properties 0".
-                # If no "Properties 0" is written by default by the main write function,
-                # this logic will correctly use 0, and a "Properties 0" block should be ensured by the caller.
 
             line = f"  {eid} {property_id_to_write}" # Two leading spaces
             # Add node numbers with a single leading space for each
@@ -1266,57 +1235,92 @@ def _write_submodelparts(fh, mesh, cells_to_write, mdpa_written_entity_ids):
     mdpa_written_entity_ids : dict
         Mapping of (meshio_type, local_idx) to written MDPA ID. (Used by fallback path, currently inactive).
     """
-    # cells_to_write and mdpa_written_entity_ids are not actively used if submodelpart_info exists
-    # and contains raw IDs, which is the preferred pathway. They were part of an older
-    # logic for deriving SubModelPart contents from mesh.cell_sets and re-indexing.
-    if not hasattr(mesh, 'misc_data') or "submodelpart_info" not in mesh.misc_data:
+    misc_data = getattr(mesh, "misc_data", {})
+    smp_info_dict = misc_data.get("submodelpart_info", {})
+
+    if not smp_info_dict:
         # Fallback for older mesh objects or if submodelpart_info is not populated
-        if hasattr(mesh, 'cell_sets') and mesh.cell_sets: # Indent: 8
-            warn("Writing SubModelParts from mesh.cell_sets; new misc_data['submodelpart_info'] structure preferred for richer data and correct ID mapping.") # Indent: 12
+        if hasattr(mesh, "cell_sets") and mesh.cell_sets:
+            warn(
+                "Writing SubModelParts from mesh.cell_sets; new misc_data['submodelpart_info'] structure preferred for richer data and correct ID mapping."
+            )
             # Basic attempt to write from cell_sets if it exists, though IDs will be local indices
-            for smp_name, list_of_arrays in mesh.cell_sets.items(): # Indent: 12
-                fh.write(f"Begin SubModelPart {smp_name}\n".encode()) # Indent: 16
+            for smp_name, list_of_arrays in mesh.cell_sets.items():
+                fh.write(f"Begin SubModelPart {smp_name}\n".encode())
                 # This path does not distinguish Nodes/Elements/Conditions from cell_sets currently
                 # It would need more sophisticated logic based on mesh.cells structure
-                fh.write(b"    Begin SubModelPartNodes\n    End SubModelPartNodes\n") # Indent: 16 (string has 4 spaces)
-                fh.write(b"    Begin SubModelPartElements\n    End SubModelPartElements\n") # Indent: 16 (string has 4 spaces)
-                fh.write(b"    Begin SubModelPartConditions\n    End SubModelPartConditions\n") # Indent: 16 (string has 4 spaces)
-                fh.write(b"End SubModelPart\n\n") # Indent: 16
-        return # Indent: 8
+                fh.write(b"    Begin SubModelPartNodes\n    End SubModelPartNodes\n")
+                fh.write(
+                    b"    Begin SubModelPartElements\n    End SubModelPartElements\n"
+                )
+                fh.write(
+                    b"    Begin SubModelPartConditions\n    End SubModelPartConditions\n"
+                )
+                fh.write(b"End SubModelPart\n\n")
+        return
 
-    smp_info_dict = mesh.misc_data.get("submodelpart_info", {})
+    # Sort names to process parents before children
     sorted_smp_names = sorted(smp_info_dict.keys())
+    open_stack = []
+
     for smp_name in sorted_smp_names:
+        parts = smp_name.split("/")
+        # Pop from stack until we find a common ancestor
+        while open_stack and not smp_name.startswith("/".join(open_stack) + "/"):
+            indent = "    " * (len(open_stack) - 1)
+            fh.write(f"{indent}End SubModelPart\n".encode())
+            open_stack.pop()
+
+        indent = "    " * len(open_stack)
+        leaf_name = parts[-1]
+        fh.write(f"{indent}Begin SubModelPart {leaf_name}\n".encode())
+        open_stack.append(leaf_name)
+
         smp_content = smp_info_dict[smp_name]
-        leaf_smp_name = smp_name.split('/')[-1]
-        fh.write(f"Begin SubModelPart {leaf_smp_name}\n".encode()) # Level 1, 0 spaces
+        data_indent = "    " * len(open_stack)
+        item_indent = "    " * (len(open_stack) + 1)
+
         if "data" in smp_content and smp_content["data"]:
-            fh.write(b"    Begin SubModelPartData\n") # Level 2, 4 spaces
-            for k,v in smp_content["data"].items():
-                    if isinstance(v, str):
-                        fh.write(f"        {k} {v}\n".encode()) # Level 3, 8 spaces
-                    elif isinstance(v, (int, float)):
-                        fh.write(f"        {k} {v}\n".encode()) # Level 3, 8 spaces
-                    else:
-                        fh.write(f"        {k} {repr(v)}\n".encode()) # Level 3, 8 spaces
-            fh.write(b"    End SubModelPartData\n")   # Level 2, 4 spaces
+            fh.write(f"{data_indent}Begin SubModelPartData\n".encode())
+            for k, v in smp_content["data"].items():
+                if isinstance(v, str):
+                    fh.write(f"{item_indent}{k} {v}\n".encode())
+                elif isinstance(v, (int, float)):
+                    fh.write(f"{item_indent}{k} {v}\n".encode())
+                else:
+                    fh.write(f"{item_indent}{k} {repr(v)}\n".encode())
+            fh.write(f"{data_indent}End SubModelPartData\n".encode())
+
         if "tables" in smp_content and smp_content["tables"]:
-            fh.write(b"    Begin SubModelPartTables\n") # Level 2, 4 spaces
-            for table_id in smp_content["tables"]: fh.write(f"        {table_id}\n".encode()) # Level 3, 8 spaces
-            fh.write(b"    End SubModelPartTables\n")   # Level 2, 4 spaces
+            fh.write(f"{data_indent}Begin SubModelPartTables\n".encode())
+            for table_id in smp_content["tables"]:
+                fh.write(f"{item_indent}{table_id}\n".encode())
+            fh.write(f"{data_indent}End SubModelPartTables\n".encode())
+
         if "nodes" in smp_content and len(smp_content["nodes"]) > 0:
-            fh.write(b"    Begin SubModelPartNodes\n")  # Level 2, 4 spaces
-            for node_idx_0based in smp_content["nodes"]: fh.write(f"        {node_idx_0based+1}\n".encode()) # Level 3, 8 spaces
-            fh.write(b"    End SubModelPartNodes\n")    # Level 2, 4 spaces
+            fh.write(f"{data_indent}Begin SubModelPartNodes\n".encode())
+            for node_idx_0based in smp_content["nodes"]:
+                fh.write(f"{item_indent}{node_idx_0based+1}\n".encode())
+            fh.write(f"{data_indent}End SubModelPartNodes\n".encode())
+
         if "elements_raw" in smp_content and len(smp_content["elements_raw"]) > 0:
-            fh.write(b"    Begin SubModelPartElements\n") # Level 2, 4 spaces
-            for elem_id_1_based in smp_content["elements_raw"]: fh.write(f"        {elem_id_1_based}\n".encode()) # Level 3, 8 spaces
-            fh.write(b"    End SubModelPartElements\n")   # Level 2, 4 spaces
+            fh.write(f"{data_indent}Begin SubModelPartElements\n".encode())
+            for elem_id_1_based in smp_content["elements_raw"]:
+                fh.write(f"{item_indent}{elem_id_1_based}\n".encode())
+            fh.write(f"{data_indent}End SubModelPartElements\n".encode())
+
         if "conditions_raw" in smp_content and len(smp_content["conditions_raw"]) > 0:
-            fh.write(b"    Begin SubModelPartConditions\n")# Level 2, 4 spaces
-            for cond_id_1_based in smp_content["conditions_raw"]: fh.write(f"        {cond_id_1_based}\n".encode()) # Level 3, 8 spaces
-            fh.write(b"    End SubModelPartConditions\n")  # Level 2, 4 spaces
-        fh.write(b"End SubModelPart\n\n") # Level 1, 0 spaces
+            fh.write(f"{data_indent}Begin SubModelPartConditions\n".encode())
+            for cond_id_1_based in smp_content["conditions_raw"]:
+                fh.write(f"{item_indent}{cond_id_1_based}\n".encode())
+            fh.write(f"{data_indent}End SubModelPartConditions\n".encode())
+
+    # Close remaining blocks
+    while open_stack:
+        indent = "    " * (len(open_stack) - 1)
+        fh.write(f"{indent}End SubModelPart\n".encode())
+        open_stack.pop()
+    fh.write(b"\n")
 
 def _write_data_generic(fh, block_name_prefix, variable_name, data_array_dict,
                         fixed_status_dict, entity_id_map, is_nodal_data):
@@ -1413,32 +1417,22 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
         May also be raised for other I/O errors.
     """
     if binary: raise WriteError("Binary writing is not supported for MDPA format.")
-    if mesh.points.shape[1] == 2:
+    if mesh.points.ndim > 1 and mesh.points.shape[1] == 2:
         warn("mdpa requires 3D points, but 2D points given. Appending 0 third component.")
         points = np.column_stack([mesh.points, np.zeros_like(mesh.points[:, 0])])
     else: points = mesh.points
 
+    misc_data = getattr(mesh, "misc_data", {})
+
     # VTK to Kratos permutations. These are the inverses of the Kratos-to-VTK
     # permutations applied in `_prepare_cells`.
-    vtk_to_kratos_h20_perm = np.array(
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 17, 18, 19, 12, 15, 14, 13], dtype=int
-    )
-    # For H27, VTK node order for edges is typically: bottom (8-11), top (12-15), vertical (16-19).
-    # The Kratos ordering (from kratos_to_vtk_h27_perm in _prepare_cells) maps:
-    #   Kratos bottom edges (nodes 8-11) to VTK 8,11,10,9
-    #   Kratos vertical edges (nodes 12-15) to VTK 16,19,18,17
-    #   Kratos top edges (nodes 16-19) to VTK 12,15,14,13
-    #   Kratos face centers (nodes 20-25) to VTK 20,22,24,21,23,25
-    # This vtk_to_kratos_h27_perm is np.argsort(kratos_to_vtk_h27_perm)
-    # to ensure it's the exact mathematical inverse.
-    vtk_to_kratos_h27_perm = np.array([
-        0, 1, 2, 3, 4, 5, 6, 7,  # Corners: VTK 0-7   -> Kratos 0-7
-        8, 11, 10, 9,            # VTK 8-11  (bottom edges) -> Kratos 8,9,10,11 (indices permuted)
-        16, 19, 18, 17,          # VTK 12-15 (top edges)    -> Kratos 16,17,18,19 (indices permuted)
-        12, 15, 14, 13,          # VTK 16-19 (vertical edges) -> Kratos 12,13,14,15 (indices permuted)
-        20, 23, 21, 24, 22, 25,  # VTK 20-25 (face centers) -> Kratos 20,21,22,23,24,25 (indices permuted)
-        26                       # Center: VTK 26 -> Kratos 26
-    ], dtype=int)
+    # Kratos Node i is VTK node h20_kratos_nodes[i].
+    # So to write in Kratos order, we take nodes at these VTK indices.
+    h20_kratos_nodes = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 13, 14, 15], dtype=int)
+    vtk_to_kratos_h20_perm = h20_kratos_nodes
+
+    h27_kratos_nodes = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 15, 14, 13, 20, 23, 21, 24, 22, 25, 26], dtype=int)
+    vtk_to_kratos_h27_perm = h27_kratos_nodes
 
 
     cells_to_write = []
@@ -1509,18 +1503,10 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
         mdpa_written_entity_ids = _write_elements_and_conditions(fh, mesh, cells_to_write)
 
         # Write Geometries if they exist
-        if hasattr(mesh, 'geometries_block') and mesh.geometries_block:
-            mdpa_geom_ids_info = mesh.misc_data.get("mdpa_geometry_ids_info", [])
-            # Corrected: mdpa_geom_ids_info might be stored under "reader_..." key by some logic
-            if not mdpa_geom_ids_info and "reader_geometry_ids_info" in mesh.misc_data: # Hypothetical key
-                 mdpa_geom_ids_info = mesh.misc_data.get("reader_geometry_ids_info", [])
-            elif not mdpa_geom_ids_info and "mdpa_geometry_ids_info" not in mesh.misc_data:
-                 # If "mdpa_geometry_ids_info" was the one read, it should be in misc_data directly.
-                 # This check is more of a safeguard or for alternative storage patterns.
-                 pass
-
-
-            _write_geometries(fh, mesh.geometries_block, mdpa_geom_ids_info, float_fmt)
+        geometries_block = getattr(mesh, "geometries_block", None)
+        if geometries_block:
+            mdpa_geom_ids_info = misc_data.get("mdpa_geometry_ids_info", [])
+            _write_geometries(fh, geometries_block, mdpa_geom_ids_info, float_fmt)
 
         if hasattr(mesh, 'point_data') and mesh.point_data:
             for name, data_array in mesh.point_data.items():
