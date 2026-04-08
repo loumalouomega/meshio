@@ -127,7 +127,7 @@ def _read_single_table(f, header_parts):
         except ValueError: warn(f"Row in Table {table_id} contains non-numeric data. Skipping row: {stripped_line}")
     return {"id": table_id, "variables": variables, "data": np.array(table_data_rows, dtype=float) if table_data_rows else np.empty((0, len(variables)))}
 
-_mdpa_to_meshio_type = {
+_kratos_geometries_to_meshio_type = {
     "Line2D2": "line", "Line3D2": "line", "Triangle2D3": "triangle", "Triangle3D3": "triangle",
     "Quadrilateral2D4": "quad", "Quadrilateral3D4": "quad", "Tetrahedra3D4": "tetra",
     "Hexahedra3D8": "hexahedron", "Prism3D6": "wedge", "Line2D3": "line3", "Line3D3": "line3",
@@ -136,15 +136,69 @@ _mdpa_to_meshio_type = {
     "Point2D": "vertex", "Point3D": "vertex", "Quadrilateral2D8": "quad8",
     "Quadrilateral3D8": "quad8", "Hexahedra3D20": "hexahedron20",
 }
-_meshio_to_mdpa_type = {v_meshio: k_mdpa for k_mdpa, v_meshio in _mdpa_to_meshio_type.items()}
-inverse_num_nodes_per_cell = {v_nnodes: k_type for k_type, v_nnodes in num_nodes_per_cell.items()}
-local_dimension_types = {
-    "Line2D2": 1, "Line3D2": 1, "Triangle2D3": 2, "Triangle3D3": 2, "Quadrilateral2D4": 2,
-    "Quadrilateral3D4": 2, "Tetrahedra3D4": 3, "Hexahedra3D8": 3, "Prism3D6": 3,
-    "Line2D3": 1, "Triangle2D6": 2, "Triangle3D6": 2, "Quadrilateral2D9": 2,
-    "Quadrilateral3D9": 2, "Tetrahedra3D10": 3, "Hexahedra3D27": 3, "Point2D": 0,
-    "Point3D": 0, "Quadrilateral2D8": 2, "Quadrilateral3D8": 2, "Hexahedra3D20": 3,
+
+_kratos_elements_to_meshio_type = {
+    "Element2D1N": "vertex", "Element2D2N": "line", "Element2D3N": "triangle",
+    "Element2D6N": "triangle6", "Element2D4N": "quad", "Element2D8N": "quad8",
+    "Element2D9N": "quad9", "Element3D1N": "vertex", "Element3D2N": "line",
+    "Element3D3N": "triangle", "Element3D4N": "tetra", "Element3D5N": "pyramid",
+    "Element3D6N": "wedge", "Element3D8N": "hexahedron", "Element3D10N": "tetra10",
+    "Element3D13N": "wedge15", "Element3D15N": "wedge15", "Element3D20N": "hexahedron20",
+    "Element3D27N": "hexahedron27", "PointElement2D1N": "vertex", "PointElement3D1N": "vertex",
+    "LineElement2D2N": "line", "LineElement2D3N": "line3", "LineElement3D2N": "line",
+    "LineElement3D3N": "line3", "SurfaceElement3D3N": "triangle", "SurfaceElement3D6N": "triangle6",
+    "SurfaceElement3D4N": "quad", "SurfaceElement3D8N": "quad8", "SurfaceElement3D9N": "quad9",
+    "Triangle2D3": "triangle", "Line2D2": "line", # Legacy/Common names without N
+    "Quadrilateral2D4": "quad", "Tetrahedra3D4": "tetra", "Hexahedra3D8": "hexahedron",
+    "Triangle3D3": "triangle", "Line3D2": "line", "Quadrilateral3D4": "quad",
+    "Hexahedra3D20": "hexahedron20", "Hexahedra3D27": "hexahedron27",
 }
+
+_kratos_conditions_to_meshio_type = {
+    "PointCondition2D1N": "vertex", "PointCondition3D1N": "vertex",
+    "LineCondition2D2N": "line", "LineCondition2D3N": "line3",
+    "LineCondition3D2N": "line", "LineCondition3D3N": "line3",
+    "SurfaceCondition3D3N": "triangle", "SurfaceCondition3D6N": "triangle6",
+    "SurfaceCondition3D4N": "quad", "SurfaceCondition3D8N": "quad8",
+    "SurfaceCondition3D9N": "quad9", "PrismCondition2D4N": "quad",
+    "PrismCondition3D6N": "wedge",
+}
+
+_meshio_to_kratos_geometry_type = {v: k for k, v in _kratos_geometries_to_meshio_type.items()}
+# For elements and conditions, we pick a default Kratos type if multiple map to the same meshio type.
+# Usually the ones with "Element" or "Condition" in the name are preferred for specific blocks.
+_meshio_to_kratos_element_type = {
+    "vertex": "Element3D1N", "line": "Element3D2N", "triangle": "Element3D3N",
+    "tetra": "Element3D4N", "pyramid": "Element3D5N", "wedge": "Element3D6N",
+    "hexahedron": "Element3D8N", "line3": "LineElement3D3N", "triangle6": "Element3D6N", # Wait, Element2D6N/3D6N? Element2D6N is tri6
+    "quad": "Element2D4N", "quad8": "Element2D8N", "quad9": "Element2D9N",
+    "tetra10": "Element3D10N", "hexahedron20": "Element3D20N", "hexahedron27": "Element3D27N",
+}
+# Correcting tri6 which was wrong above
+_meshio_to_kratos_element_type["triangle6"] = "Element2D6N"
+
+_meshio_to_kratos_condition_type = {
+    "vertex": "PointCondition3D1N", "line": "LineCondition3D2N", "line3": "LineCondition3D3N",
+    "triangle": "SurfaceCondition3D3N", "triangle6": "SurfaceCondition3D6N",
+    "quad": "SurfaceCondition3D4N", "quad8": "SurfaceCondition3D8N", "quad9": "SurfaceCondition3D9N",
+}
+
+inverse_num_nodes_per_cell = {v_nnodes: k_type for k_type, v_nnodes in num_nodes_per_cell.items()}
+
+local_dimension_types = {}
+for k in _kratos_geometries_to_meshio_type:
+    if "3D" in k: local_dimension_types[k] = 3
+    elif "2D" in k: local_dimension_types[k] = 2
+    else: local_dimension_types[k] = 3
+for k in _kratos_elements_to_meshio_type:
+    if "3D" in k: local_dimension_types[k] = 3
+    elif "2D" in k: local_dimension_types[k] = 2
+    else: local_dimension_types[k] = 3
+for k in _kratos_conditions_to_meshio_type:
+    if "3D" in k: local_dimension_types[k] = 3
+    elif "2D" in k: local_dimension_types[k] = 2
+    else: local_dimension_types[k] = 3
+
 
 def _parse_generic_data_block(f, block_end_str, variable_name_full,
                               entity_id_map, data_storage_target,
@@ -396,15 +450,17 @@ def _read_cells(f, cells_list, is_ascii, cell_tags_dict, environ, mdpa_element_i
     meshio_cell_type = None; is_element_block = False
     if environ is not None:
         cleaned_environ_header = environ.split("//",1)[0].strip()
-        block_type_str = "Elements" if environ.startswith("Begin Elements ") else "Conditions" if environ.startswith("Begin Conditions ") else None
+        block_type_str = "Elements" if cleaned_environ_header.startswith("Begin Elements") else "Conditions" if cleaned_environ_header.startswith("Begin Conditions") else None
         if block_type_str:
             is_element_block = block_type_str == "Elements"
             entity_name_mdpa = " ".join(cleaned_environ_header.split()[2:])
-            for k_mdpa, v_meshio in _mdpa_to_meshio_type.items():
+            mapping_to_use = _kratos_elements_to_meshio_type if is_element_block else _kratos_conditions_to_meshio_type
+            for k_mdpa, v_meshio in mapping_to_use.items():
                 if k_mdpa == entity_name_mdpa: meshio_cell_type = v_meshio; break
             if meshio_cell_type is None:
-                 for k_mdpa, v_meshio in _mdpa_to_meshio_type.items():
-                    if k_mdpa in entity_name_mdpa: meshio_cell_type = v_meshio; break
+                 # Try longest keys first to avoid ambiguous partial matches (e.g., "Line" matching "Line3D2")
+                 for k_mdpa in sorted(mapping_to_use.keys(), key=len, reverse=True):
+                    if k_mdpa in entity_name_mdpa: meshio_cell_type = mapping_to_use[k_mdpa]; break
     line_at_end = ""
     while True:
         line_raw = f.readline().decode()
@@ -475,13 +531,13 @@ def _read_geometries(f, geometries_list, is_ascii, geometry_tags_dict, environ, 
         if len(parts) >= 3:
             geometry_name_mdpa = " ".join(parts[2:])
             # Attempt to find a direct match for geometry_name_mdpa
-            if geometry_name_mdpa in _mdpa_to_meshio_type:
-                meshio_geometry_type = _mdpa_to_meshio_type[geometry_name_mdpa]
+            if geometry_name_mdpa in _kratos_geometries_to_meshio_type:
+                meshio_geometry_type = _kratos_geometries_to_meshio_type[geometry_name_mdpa]
             else:
-                # Fallback: check if any known MDPA type is a substring
-                for k_mdpa, v_meshio in _mdpa_to_meshio_type.items():
+                # If no direct match, look for substrings (try longest keys first)
+                for k_mdpa in sorted(_kratos_geometries_to_meshio_type.keys(), key=len, reverse=True):
                     if k_mdpa in geometry_name_mdpa:
-                        meshio_geometry_type = v_meshio
+                        meshio_geometry_type = _kratos_geometries_to_meshio_type[k_mdpa]
                         break
             # If still None, it might be determined per-line based on node count, or raise error later
         else:
@@ -794,22 +850,6 @@ def read_buffer(f):
             current_entity_id_map = {item[0]: (item[1], item[2]) for item in id_map_list_ref}
             num_entities_per_type = {ctype: len(cdata) for ctype, cdata in cells_list_of_tuples}
             _parse_generic_data_block(f, block_end_str, variable_name_full, current_entity_id_map, cell_data_parsed_blocks, num_entities_per_type, False)
-        elif environ.startswith("Begin SubModelPart "):
-            smp_name_on_line = environ[len("Begin SubModelPart "):].strip().split("//",1)[0].strip()
-            if not smp_name_on_line: warn(f"SubModelPart name is empty. Skipping: {environ}"); consume_block(f, "End SubModelPart"); continue
-            active_submodelpart_stack.append(smp_name_on_line)
-            current_smp_name_hierarchical = "/".join(active_submodelpart_stack)
-            # print(f"DEBUG: Begin SMP, stack: {active_submodelpart_stack}, hierarchical: {current_smp_name_hierarchical}")
-            if "submodelpart_info" not in misc_data: misc_data["submodelpart_info"] = {}
-            if current_smp_name_hierarchical not in misc_data["submodelpart_info"]:
-                misc_data["submodelpart_info"][current_smp_name_hierarchical] = {"data": {}, "tables": [], "nodes": np.array([],dtype=int), "elements_raw": np.array([],dtype=int), "conditions_raw": np.array([],dtype=int)}
-        elif environ.startswith("End SubModelPart"):
-            token = environ.split("//", 1)[0].strip()
-            if token == "End SubModelPart":
-                if active_submodelpart_stack:
-                    active_submodelpart_stack.pop()
-                    current_smp_name_hierarchical = "/".join(active_submodelpart_stack) if active_submodelpart_stack else None
-                else: warn("Found End SubModelPart without a corresponding Begin.")
         elif environ.startswith("Begin SubModelPartData"):
             if not current_smp_name_hierarchical: warn("SubModelPartData found outside a SubModelPart. Skipping."); consume_block(f, "End SubModelPartData"); continue
             smp_data_dict = misc_data["submodelpart_info"][current_smp_name_hierarchical]["data"]
@@ -843,6 +883,23 @@ def read_buffer(f):
             if not current_smp_name_hierarchical: warn("SubModelPartConditions found outside a SubModelPart. Skipping."); consume_block(f, "End SubModelPartConditions"); continue
             cond_ids = _parse_submodelpart_entity_list(f, "End SubModelPartConditions")
             misc_data["submodelpart_info"][current_smp_name_hierarchical]["conditions_raw"] = cond_ids
+        elif environ.startswith("Begin SubModelPart"):
+            smp_header_cleaned = environ.split("//", 1)[0].strip()
+            smp_parts = smp_header_cleaned.split()
+            if len(smp_parts) < 3: warn(f"Malformed SubModelPart header: {environ}"); consume_block(f, "End SubModelPart"); continue
+            smp_name_on_line = smp_parts[2]
+            active_submodelpart_stack.append(smp_name_on_line)
+            current_smp_name_hierarchical = "/".join(active_submodelpart_stack)
+            if "submodelpart_info" not in misc_data: misc_data["submodelpart_info"] = {}
+            if current_smp_name_hierarchical not in misc_data["submodelpart_info"]:
+                misc_data["submodelpart_info"][current_smp_name_hierarchical] = {"data": {}, "tables": [], "nodes": np.array([],dtype=int), "elements_raw": np.array([],dtype=int), "conditions_raw": np.array([],dtype=int)}
+        elif environ.startswith("End SubModelPart"):
+            token = environ.split("//", 1)[0].strip()
+            if token == "End SubModelPart":
+                if active_submodelpart_stack:
+                    active_submodelpart_stack.pop()
+                    current_smp_name_hierarchical = "/".join(active_submodelpart_stack) if active_submodelpart_stack else None
+                else: warn("Found End SubModelPart without a corresponding Begin.")
         elif environ.startswith("Begin Mesh"):
             parts = environ.split()
             if len(parts) < 3 or parts[2] == "0": warn(f"Skipping malformed Mesh header or invalid mesh_id 0: {environ}"); consume_block(f, "End Mesh"); continue
@@ -1028,7 +1085,10 @@ def _compute_blocks_name(mesh, cells_to_iterate):
 
     if not has_gmsh_physical:
          for i, cell_block in enumerate(cells_to_iterate):
-            mdpa_type_name = _meshio_to_mdpa_type.get(cell_block.type)
+            # Try to get a Kratos name to determine dimension
+            mdpa_type_name = _meshio_to_kratos_element_type.get(cell_block.type)
+            if not mdpa_type_name:
+                mdpa_type_name = _meshio_to_kratos_condition_type.get(cell_block.type)
             cell_dim = local_dimension_types.get(mdpa_type_name, 3) # Default to 3D if type unknown
             entity = "Elements" if cell_dim == dim else "Conditions"
             bname[i] = {"part_name": f"DefaultPart{i}", "entity": entity}
@@ -1040,7 +1100,9 @@ def _compute_blocks_name(mesh, cells_to_iterate):
 
         if physical_tags_for_block is None or physical_tags_for_block.size == 0:
             if not bname[ib]: # If not already named by some other logic
-                mdpa_type_name = _meshio_to_mdpa_type.get(cell_type_str)
+                mdpa_type_name = _meshio_to_kratos_element_type.get(cell_type_str)
+                if not mdpa_type_name:
+                    mdpa_type_name = _meshio_to_kratos_condition_type.get(cell_block.type)
                 cell_dim = local_dimension_types.get(mdpa_type_name, 3)
                 entity = "Elements" if cell_dim == dim else "Conditions"
                 bname[ib] = {"part_name": f"DefaultPart_Block{ib}", "entity": entity}
@@ -1051,7 +1113,10 @@ def _compute_blocks_name(mesh, cells_to_iterate):
         pid = int(physical_tags_for_block[0]) if len(physical_tags_for_block) > 0 else None
 
         part_name_candidate = f"UnnamedGroup{pid}" # Default if pid not in pid_to_pname
-        entity_dim_candidate = local_dimension_types.get(_meshio_to_mdpa_type.get(cell_type_str), dim) # Default to mesh dim
+        kratos_name = _meshio_to_kratos_element_type.get(cell_type_str)
+        if not kratos_name:
+            kratos_name = _meshio_to_kratos_condition_type.get(cell_type_str)
+        entity_dim_candidate = local_dimension_types.get(kratos_name, dim) # Default to mesh dim
 
         if pid is not None and pid in pid_to_pname:
             # This name comes from field_data like {"PhysicalName": [pid, pdim]}
@@ -1119,7 +1184,10 @@ def _write_elements_and_conditions(fh, mesh, cells_to_write):
     global_condition_id_counter = 1
     for ib, cell_block in enumerate(cells_to_write):
         entity_block_type = bname[ib].get("entity", "Elements")
-        mdpa_type = _meshio_to_mdpa_type.get(cell_block.type, "UnknownType")
+        if entity_block_type == "Elements":
+            mdpa_type = _meshio_to_kratos_element_type.get(cell_block.type, "UnknownElement")
+        else:
+            mdpa_type = _meshio_to_kratos_condition_type.get(cell_block.type, "UnknownCondition")
         line = f"Begin {entity_block_type} {mdpa_type}\n"
         fh.write(line.encode())
         for ie, node_indices_for_cell in enumerate(cell_block.data):
@@ -1191,7 +1259,7 @@ def _write_geometries(fh, geometries_to_write, mdpa_geometry_ids_info_list, floa
     global_geometry_id_counter = 1 # Fallback counter if ID not in lookup
 
     for cell_block in geometries_to_write:
-        mdpa_type = _meshio_to_mdpa_type.get(cell_block.type)
+        mdpa_type = _meshio_to_kratos_geometry_type.get(cell_block.type)
         if not mdpa_type:
             warn(f"Skipping geometry block of unknown type: {cell_block.type}")
             continue
