@@ -240,6 +240,8 @@ def write(filename, mesh: Mesh, float_fmt: str = ".16e", binary: bool = True) ->
     """Writes msh files, cf.
     <http://gmsh.info//doc/texinfo/gmsh.html#MSH-ASCII-file-format>.
     """
+    if not binary:
+        np.set_printoptions(legacy="1.25")
     with open(filename, "wb") as fh:
         mode_idx = 1 if binary else 0
         size_of_double = 8

@@ -56,7 +56,16 @@ def read(filename):
 
 def _read_section(f, file_type, count, dtype):
     if file_type["type"] == "ascii":
-        return np.fromfile(f, count=count, dtype=dtype, sep=" ")
+        # np.fromfile(..., sep=" ") can be flaky if there are newlines or other
+        # whitespace issues.
+        # Instead, read the raw string and split it.
+        data = []
+        while len(data) < count:
+            line = f.readline().split()
+            if not line:
+                break
+            data.extend(line)
+        return np.array(data, dtype=dtype)
     return np.fromfile(f, count=count, dtype=dtype)
 
 
