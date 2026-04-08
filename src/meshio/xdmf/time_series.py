@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 from io import BytesIO
+from typing import Union
 from xml.etree import ElementTree as ET
 
 import numpy as np
@@ -274,7 +275,7 @@ class TimeSeriesWriter:
     def write_points_cells(
         self,
         points: ArrayLike,
-        cells: dict[str, ArrayLike] | list[tuple[str, ArrayLike] | CellBlock],
+        cells: Union[dict[str, ArrayLike], list[Union[tuple[str, ArrayLike], CellBlock]]],
     ) -> None:
         # <Grid Name="mesh" GridType="Uniform">
         #   <Topology NumberOfElements="16757" TopologyType="Triangle" NodesPerElement="3">
@@ -361,7 +362,7 @@ class TimeSeriesWriter:
 
     def cells(
         self,
-        cells: dict[str, ArrayLike] | list[tuple[str, ArrayLike] | CellBlock],
+        cells: Union[dict[str, ArrayLike], list[Union[tuple[str, ArrayLike], CellBlock]]],
         grid: ET.Element,
     ) -> None:
         if isinstance(cells, dict):

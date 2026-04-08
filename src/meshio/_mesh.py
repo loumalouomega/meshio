@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import copy
+from typing import Any, Union
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -86,8 +86,8 @@ class CellBlock:
     def __init__(
         self,
         cell_type: str,
-        data: list | np.ndarray,
-        tags: list[str] | None = None,
+        data: Union[list, np.ndarray],
+        tags: Union[list[str], None] = None,
     ):
         self.type = cell_type
         self.data = data
@@ -117,12 +117,12 @@ class Mesh:
     def __init__(
         self,
         points: ArrayLike,
-        cells: dict[str, ArrayLike] | list[tuple[str, ArrayLike] | CellBlock],
-        point_data: dict[str, ArrayLike] | None = None,
-        cell_data: dict[str, list[ArrayLike]] | None = None,
+        cells: Union[dict[str, ArrayLike], list[Union[tuple[str, ArrayLike], CellBlock]]],
+        point_data: Union[dict[str, ArrayLike], None] = None,
+        cell_data: Union[dict[str, list[ArrayLike]], None] = None,
         field_data=None,
-        point_sets: dict[str, ArrayLike] | None = None,
-        cell_sets: dict[str, list[ArrayLike]] | None = None,
+        point_sets: Union[dict[str, ArrayLike], None] = None,
+        cell_sets: Union[dict[str, list[ArrayLike]], None] = None,
         gmsh_periodic=None,
         info=None,
     ):
@@ -234,7 +234,7 @@ class Mesh:
     def copy(self):
         return copy.deepcopy(self)
 
-    def write(self, path_or_buf, file_format: str | None = None, **kwargs):
+    def write(self, path_or_buf, file_format: Union[str, None] = None, **kwargs):
         # avoid circular import
         from ._helpers import write
 
@@ -313,7 +313,7 @@ class Mesh:
         warn("meshio.Mesh.read is deprecated, use meshio.read instead")
         return read(path_or_buf, file_format)
 
-    def cell_sets_to_data(self, data_name: str | None = None):
+    def cell_sets_to_data(self, data_name: Union[str, None] = None):
         # If possible, convert cell sets to integer cell data. This is possible if all
         # cells appear exactly in one group.
         default_value = -1
