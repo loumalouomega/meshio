@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from ._common import error, num_nodes_per_cell
+from ._common import num_nodes_per_cell
 from ._exceptions import ReadError, WriteError
 from ._files import is_buffer
 from ._mesh import CellBlock, Mesh
@@ -110,8 +109,7 @@ def _read_file(path: Path, file_format: str | None):
         lst = ", ".join(possible_file_formats)
         msg = f"Couldn't read file {path} as either of {lst}"
 
-    error(msg)
-    sys.exit(1)
+    raise ReadError(msg)
 
 
 def write_points_cells(

@@ -297,6 +297,8 @@ def write(filename, mesh, float_fmt=".16e", binary=True):
     """Writes msh files, cf.
     <http://gmsh.info/doc/texinfo/gmsh.html#MSH-file-format>.
     """
+    if not binary:
+        np.set_printoptions(legacy="1.25")
     # Filter the point data: gmsh:dim_tags are tags, the rest is actual point data.
     point_data = {}
     for key, d in mesh.point_data.items():
