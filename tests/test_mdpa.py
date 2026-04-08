@@ -1,6 +1,7 @@
 import pathlib  # Ensure pathlib is imported at the top
 
 import numpy as np
+import pytest
 
 import meshio
 
@@ -61,7 +62,6 @@ End Elements
 """
     import pathlib
     import tempfile
-
 
     # from meshio.mdpa import _mdpa # No longer directly calling read_buffer
 
@@ -1916,14 +1916,15 @@ def test_empty_file_write_read(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "filename, ref_num_points, ref_cells_info",
+    "filename, ref_num_points, ref_cells_info, ref_geoms_info",
     [
-        ("small_cube_test.mdpa", 8, {"tetra": 6}),
-        ("submodelpart_test.mdpa", 6, {"quad": 3}),
-        ("elements_and_conditions_test.mdpa", 16, {"triangle": 18, "line": 12}),
+        ("test_small_cube.mdpa", 8, {"tetra": 6}, {}),
+        ("test_submodelpart.mdpa", 6, {"quad": 3}, {}),
+        ("test_elements_and_conditions.mdpa", 16, {"triangle": 18, "line": 12}, {}),
+        ("test_geometries.mdpa", 5, {"triangle": 1}, {"triangle": 2, "line": 2}),
     ],
 )
-def test_reference_file(filename, ref_num_points, ref_cells_info):
+def test_reference_file(filename, ref_num_points, ref_cells_info, ref_geoms_info):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "mdpa" / filename
 
@@ -1934,13 +1935,20 @@ def test_reference_file(filename, ref_num_points, ref_cells_info):
         assert cell_block.type in ref_cells_info
         assert len(cell_block.data) == ref_cells_info[cell_block.type]
 
-    if filename.name == "submodelpart_test.mdpa":
+    if ref_geoms_info:
+        assert hasattr(mesh, "geometries_block") and mesh.geometries_block is not None
+        assert len(mesh.geometries_block) == len(ref_geoms_info)
+        for geom_block in mesh.geometries_block:
+            assert geom_block.type in ref_geoms_info
+            assert len(geom_block.data) == ref_geoms_info[geom_block.type]
+
+    if filename.name == "test_submodelpart.mdpa":
         assert "submodelpart_info" in mesh.misc_data
         assert "Parts_Parts_Auto1" in mesh.misc_data["submodelpart_info"]
         smp = mesh.misc_data["submodelpart_info"]["Parts_Parts_Auto1"]
         assert len(smp["nodes"]) == 6
         assert len(smp["elements_raw"]) == 3
-    elif filename.name == "elements_and_conditions_test.mdpa":
+    elif filename.name == "test_elements_and_conditions.mdpa":
         assert "submodelpart_info" in mesh.misc_data
         smp_info = mesh.misc_data["submodelpart_info"]
         assert "Main_domain" in smp_info

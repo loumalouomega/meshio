@@ -442,7 +442,7 @@ def _parse_generic_data_block(
                 actual_values_str = values_and_maybe_fixed_str
             else:
                 warn(
-                    f"Data line for {variable_name} ID {entity_id_1_based} has wrong number of values. Expected {num_components} or {num_components+1 if is_nodal_data else num_components}. Got {len(values_and_maybe_fixed_str)}. Skipping: {line_content}"
+                    f"Data line for {variable_name} ID {entity_id_1_based} has wrong number of values. Expected {num_components} or {num_components + 1 if is_nodal_data else num_components}. Got {len(values_and_maybe_fixed_str)}. Skipping: {line_content}"
                 )
                 continue
         if len(actual_values_str) != num_components:
@@ -1053,7 +1053,7 @@ def _parse_submodelpart_entity_list(f, end_block_str):
             entity_ids.append(int(token))
         except ValueError:
             warn(
-                f"Non-integer ID in {end_block_str.replace('End ','')} list: {stripped_line}"
+                f"Non-integer ID in {end_block_str.replace('End ', '')} list: {stripped_line}"
             )
     return np.array(entity_ids, dtype=int)
 
@@ -1755,7 +1755,9 @@ def _compute_blocks_name(mesh, cells_to_iterate):
                     entity_dim_candidate = fd_val[1]
                     pdim_found = True
                     break
-            if not pdim_found:  # Fallback to cell_type's dimension if specific pdim not in field_data
+            if (
+                not pdim_found
+            ):  # Fallback to cell_type's dimension if specific pdim not in field_data
                 entity_dim_candidate = local_dimension_types.get(
                     _meshio_to_kratos_element_type.get(cell_type_str), dim
                 )
@@ -2016,7 +2018,7 @@ def _write_submodelparts(fh, mesh, cells_to_write, mdpa_written_entity_ids):
         if "nodes" in smp_content and len(smp_content["nodes"]) > 0:
             fh.write(f"{data_indent}Begin SubModelPartNodes\n".encode())
             for node_idx_0based in smp_content["nodes"]:
-                fh.write(f"{item_indent}{node_idx_0based+1}\n".encode())
+                fh.write(f"{item_indent}{node_idx_0based + 1}\n".encode())
             fh.write(f"{data_indent}End SubModelPartNodes\n".encode())
 
         if "elements_raw" in smp_content and len(smp_content["elements_raw"]) > 0:
@@ -2408,7 +2410,7 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
                     fh.write(b"    Begin MeshNodes\n")  # Level 2, 4 spaces
                     for node_idx_0based in mesh_content["nodes"]:
                         fh.write(
-                            f"        {node_idx_0based+1}\n".encode()
+                            f"        {node_idx_0based + 1}\n".encode()
                         )  # Level 3, 8 spaces
                     fh.write(b"    End MeshNodes\n")  # Level 2, 4 spaces
 
