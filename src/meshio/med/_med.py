@@ -432,7 +432,7 @@ def _create_component_names(n_components):
     """To be correctly read in a MED viewer, each component must be a string of width
     16. Since we do not know the physical nature of the data, we just use V1, V2,...
     """
-    return [f"V{(i+1)}" for i in range(n_components)]
+    return [f"V{(i + 1)}" for i in range(n_components)]
 
 
 def _family_name(set_id, name):
