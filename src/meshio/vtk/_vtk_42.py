@@ -2,7 +2,6 @@
 I/O for VTK <https://vtk.org/wp-content/uploads/2015/04/file-formats.pdf>.
 """
 
-import math
 from functools import reduce
 
 import numpy as np
@@ -293,7 +292,9 @@ def _check_mesh(info):
 
 def _generate_cells(dim):
     ele_dim = [d - 1 for d in dim if d > 1]
-    ele_no = math.prod(ele_dim)
+    # TODO use math.prod when requiring Python 3.8+? this would save the int conversion
+    # <https://github.com/microsoft/pyright/issues/1226>
+    ele_no = int(np.prod(ele_dim))
     spatial_dim = len(ele_dim)
 
     if spatial_dim == 1:
