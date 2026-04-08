@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 I/O for Ansys's msh format.
 

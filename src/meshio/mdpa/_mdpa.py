@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 I/O for KratosMultiphysics's mdpa format, cf.
 <https://github.com/KratosMultiphysics/Kratos/wiki/Input-data>.
