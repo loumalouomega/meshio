@@ -64,7 +64,6 @@ End Elements
     import tempfile
 
     # from meshio.mdpa import _mdpa # No longer directly calling read_buffer
-
     # Create a temporary file to use with meshio.mdpa.read
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".mdpa") as tmpfile:
         tmpfile.write(mdpa_content)
@@ -856,7 +855,7 @@ def assert_mesh_data_equal(data1, data2, tol=1e-7):
     Recursively asserts equality for mesh data structures (dictionaries, lists,
     numpy arrays, strings, numbers). Handles np.nan comparison for floats.
     """
-    assert type(data1) == type(
+    assert type(data1) is type(
         data2
     ), f"Type mismatch: {type(data1)} vs {type(data2)} for data1={data1}, data2={data2}"
 
@@ -1303,7 +1302,9 @@ Begin SubModelPart Fluid
     End SubModelPartConditions
 End SubModelPart
 
-""".split("\n")
+""".split(
+    "\n"
+)
 
 
 # Path to the new test file for comprehensive geometry reading
@@ -1567,7 +1568,7 @@ def test_write_manual_geometries(tmp_path):
 
 # Helper for deep comparison of misc_data like structures
 def assert_misc_data_equal(data1, data2, path=""):
-    assert type(data1) == type(
+    assert type(data1) is type(
         data2
     ), f"Type mismatch at {path}: {type(data1)} vs {type(data2)}"
     if isinstance(data1, dict):

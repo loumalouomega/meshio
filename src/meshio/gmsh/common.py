@@ -66,9 +66,17 @@ def _read_data(f, tag, data_dict, data_size, is_ascii):
     num_components = integer_tags[1]
     num_items = integer_tags[2]
     if is_ascii:
-        data = np.fromfile(f, count=num_items * (1 + num_components), sep=" ").reshape(
-            (num_items, 1 + num_components)
-        )
+        # We need to read num_items * (1 + num_components) floats.
+        # np.fromfile(..., sep=" ") can be flaky if there are newlines or other
+        # whitespace issues.
+        # Instead, read the raw string and split it.
+        data = []
+        while len(data) < num_items * (1 + num_components):
+            line = f.readline().decode().split()
+            if not line:
+                break
+            data.extend([float(val) for val in line])
+        data = np.array(data).reshape((num_items, 1 + num_components))
         # The first entry is the node number
         data = data[:, 1:]
     else:
@@ -273,7 +281,7 @@ def _write_data(fh, tag, name, data, binary):
         tmp.tofile(fh)
         fh.write(b"\n")
     else:
-        fmt = " ".join(["{}"] + ["{!r}"] * num_components) + "\n"
+        fmt = " ".join(["{}"] + ["{!s}"] * num_components) + "\n"
         # TODO unify
         if num_components == 1:
             for k, x in enumerate(data):

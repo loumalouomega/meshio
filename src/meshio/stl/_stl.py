@@ -6,6 +6,7 @@ I/O for the STL format, cf.
 from __future__ import annotations
 
 import os
+from typing import Union
 
 import numpy as np
 
@@ -51,9 +52,9 @@ def read(filename):
 def iter_loadtxt(
     infile,
     skiprows: int = 0,
-    comments: str | tuple[str, ...] = "#",
+    comments: Union[str, tuple[str, ...]] = "#",
     dtype=float,
-    usecols: tuple[int] | None = None,
+    usecols: Union[tuple[int], None] = None,
 ):
     def iter_func():
         items = None

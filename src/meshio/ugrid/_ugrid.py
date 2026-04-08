@@ -56,7 +56,16 @@ def read(filename):
 
 def _read_section(f, file_type, count, dtype):
     if file_type["type"] == "ascii":
-        return np.fromfile(f, count=count, dtype=dtype, sep=" ")
+        # np.fromfile(..., sep=" ") can be flaky if there are newlines or other
+        # whitespace issues.
+        # Instead, read the raw string and split it.
+        data = []
+        while len(data) < count:
+            line = f.readline().split()
+            if not line:
+                break
+            data.extend(line)
+        return np.array(data, dtype=dtype)
     return np.fromfile(f, count=count, dtype=dtype)
 
 
@@ -145,7 +154,7 @@ def read_buffer(f, file_type):
 def _write_section(f, file_type, array, dtype):
     if file_type["type"] == "ascii":
         ncols = array.shape[1]
-        fmt = " ".join(["%r"] * ncols)
+        fmt = " ".join(["%s"] * ncols)
         np.savetxt(f, array, fmt=fmt)
     else:
         array.astype(dtype).tofile(f)

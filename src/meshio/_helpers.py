@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
+from typing import Union
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from ._common import error, num_nodes_per_cell
+from ._common import num_nodes_per_cell
 from ._exceptions import ReadError, WriteError
 from ._files import is_buffer
 from ._mesh import CellBlock, Mesh
@@ -57,7 +57,7 @@ def _filetypes_from_path(path: Path) -> list[str]:
     return out
 
 
-def read(filename, file_format: str | None = None):
+def read(filename, file_format: Union[str, None] = None):
     """Reads an unstructured mesh with added data.
 
     :param filenames: The files/PathLikes to read from.
@@ -71,7 +71,7 @@ def read(filename, file_format: str | None = None):
     return _read_file(Path(filename), file_format)
 
 
-def _read_buffer(filename, file_format: str | None):
+def _read_buffer(filename, file_format: Union[str, None]):
     if file_format is None:
         raise ReadError("File format must be given if buffer is used")
     if file_format == "tetgen":
@@ -85,7 +85,7 @@ def _read_buffer(filename, file_format: str | None):
     return reader_map[file_format](filename)
 
 
-def _read_file(path: Path, file_format: str | None):
+def _read_file(path: Path, file_format: Union[str, None]):
     if not path.exists():
         raise ReadError(f"File {path} not found.")
 
@@ -110,20 +110,19 @@ def _read_file(path: Path, file_format: str | None):
         lst = ", ".join(possible_file_formats)
         msg = f"Couldn't read file {path} as either of {lst}"
 
-    error(msg)
-    sys.exit(1)
+    raise ReadError(msg)
 
 
 def write_points_cells(
     filename,
     points: ArrayLike,
-    cells: dict[str, ArrayLike] | list[tuple[str, ArrayLike] | CellBlock],
-    point_data: dict[str, ArrayLike] | None = None,
-    cell_data: dict[str, list[ArrayLike]] | None = None,
+    cells: Union[dict[str, ArrayLike], list[Union[tuple[str, ArrayLike], CellBlock]]],
+    point_data: Union[dict[str, ArrayLike], None] = None,
+    cell_data: Union[dict[str, list[ArrayLike]], None] = None,
     field_data=None,
-    point_sets: dict[str, ArrayLike] | None = None,
-    cell_sets: dict[str, list[ArrayLike]] | None = None,
-    file_format: str | None = None,
+    point_sets: Union[dict[str, ArrayLike], None] = None,
+    cell_sets: Union[dict[str, list[ArrayLike]], None] = None,
+    file_format: Union[str, None] = None,
     **kwargs,
 ):
     points = np.asarray(points)
@@ -139,7 +138,7 @@ def write_points_cells(
     mesh.write(filename, file_format=file_format, **kwargs)
 
 
-def write(filename, mesh: Mesh, file_format: str | None = None, **kwargs):
+def write(filename, mesh: Mesh, file_format: Union[str, None] = None, **kwargs):
     """Writes mesh together with data to a file.
 
     :params filename: File to write to.
