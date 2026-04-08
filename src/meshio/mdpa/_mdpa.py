@@ -63,6 +63,7 @@ Limitations:
 The MDPA format is primarily ASCII-based and can be slow to parse for very large meshes.
 See: <https://github.com/KratosMultiphysics/Kratos/issues/5365>.
 """
+from __future__ import annotations
 
 import io
 
@@ -1233,7 +1234,7 @@ def read_buffer(f):
                         key, val_str = prop_parts
                         try:
                             value = float(val_str)
-                            value = int(value) if value.is_integer() else value
+                            value = int(value) if float(value).is_integer() else value
                         except ValueError:
                             value = val_str
                         current_prop_data[key] = value
@@ -1330,7 +1331,7 @@ def read_buffer(f):
                     key, val_str = parts
                     try:
                         value = float(val_str)
-                        value = int(value) if value.is_integer() else value
+                        value = int(value) if float(value).is_integer() else value
                     except ValueError:
                         value = val_str
                     smp_data_dict[key] = value
@@ -1460,7 +1461,7 @@ def read_buffer(f):
                             key, val_str = md_parts
                             try:
                                 value = float(val_str)
-                                value = int(value) if value.is_integer() else value
+                                value = int(value) if float(value).is_integer() else value
                             except ValueError:
                                 value = val_str
                             current_mesh_content["mesh_data"][key] = value
