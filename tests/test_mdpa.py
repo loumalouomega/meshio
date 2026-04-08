@@ -1788,21 +1788,23 @@ def test_empty_file_write_read(tmp_path):
             # Add other type checks if necessary
 
 @pytest.mark.parametrize(
-    "filename, ref_num_points, ref_num_cells, ref_cell_type",
+    "filename, ref_num_points, ref_cells_info",
     [
-        ("small_cube.mdpa", 8, 6, "tetra"),
-        ("submodelpart_test.mdpa", 6, 3, "quad"),
+        ("small_cube_test.mdpa", 8, {"tetra": 6}),
+        ("submodelpart_test.mdpa", 6, {"quad": 3}),
+        ("elements_and_conditions_test.mdpa", 16, {"triangle": 18, "line": 12}),
     ],
 )
-def test_reference_file(filename, ref_num_points, ref_num_cells, ref_cell_type):
+def test_reference_file(filename, ref_num_points, ref_cells_info):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "mdpa" / filename
 
     mesh = meshio.read(filename)
     assert len(mesh.points) == ref_num_points
-    assert len(mesh.cells) == 1
-    assert mesh.cells[0].type == ref_cell_type
-    assert len(mesh.cells[0].data) == ref_num_cells
+    assert len(mesh.cells) == len(ref_cells_info)
+    for cell_block in mesh.cells:
+        assert cell_block.type in ref_cells_info
+        assert len(cell_block.data) == ref_cells_info[cell_block.type]
 
     if filename.name == "submodelpart_test.mdpa":
         assert "submodelpart_info" in mesh.misc_data
@@ -1810,3 +1812,14 @@ def test_reference_file(filename, ref_num_points, ref_num_cells, ref_cell_type):
         smp = mesh.misc_data["submodelpart_info"]["Parts_Parts_Auto1"]
         assert len(smp["nodes"]) == 6
         assert len(smp["elements_raw"]) == 3
+    elif filename.name == "elements_and_conditions_test.mdpa":
+        assert "submodelpart_info" in mesh.misc_data
+        smp_info = mesh.misc_data["submodelpart_info"]
+        assert "Main_domain" in smp_info
+        assert len(smp_info["Main_domain"]["elements_raw"]) == 18
+        assert "Left_side" in smp_info
+        assert len(smp_info["Left_side"]["conditions_raw"]) == 3
+        assert "Main_subdomain" in smp_info
+        assert len(smp_info["Main_subdomain"]["nodes"]) == 9
+        assert len(smp_info["Main_subdomain"]["elements_raw"]) == 8
+        assert len(smp_info["Main_subdomain"]["conditions_raw"]) == 4
