@@ -25,23 +25,30 @@ The reader and writer handle the following major MDPA blocks:
 
 Kratos-Specific Node Ordering:
 ------------------------------
-Kratos uses a specific node ordering for some higher-order elements (e.g.,
-hexahedron20, hexahedron27). This module applies permutations during reading
-and writing to convert between Kratos ordering and meshio's standard VTK-based
-ordering to ensure compatibility.
+Kratos uses its own node ordering for several higher-order elements, most
+notably `hexahedron20` and `hexahedron27`. During reading, this module
+automatically permutes these nodes to match meshio's standard VTK-based ordering.
+Upon writing, the nodes are permuted back to the original Kratos sequence
+to ensure the output MDPA file remains valid for Kratos.
 
-`misc_data` for Round-Trip:
----------------------------
-MDPA-specific information that is not part of the standard meshio data model
-(e.g., original Kratos IDs for entities, SubModelPart definitions, Mesh block
-details) is stored in the `mesh.misc_data` attribute. This allows for better
-fidelity when writing an MDPA file that was previously read by this module.
-Key fields in `misc_data` include:
-- `reader_element_ids_info`: List of (original_id, type_str, local_idx) for elements.
-- `reader_condition_ids_info`: List of (original_id, type_str, local_idx) for conditions.
-- `mdpa_geometry_ids_info`: List of (original_id, type_str, local_idx) for geometries.
-- `submodelpart_info`: Dictionary holding data for SubModelParts.
-- `meshes`: Dictionary holding data for Mesh blocks.
+`misc_data` for Round-Trip Fidelity:
+------------------------------------
+Standard meshio attributes (points, cells, point_data, cell_data, field_data)
+cannot capture all the metadata present in an MDPA file. This module uses the
+`mesh.misc_data` attribute to store this extra information, ensuring a high
+fidelity round-trip:
+- `reader_element_ids_info`: Stores original Kratos IDs for elements and maps
+  them to the 0-based indexing used in meshio's `CellBlock` structures.
+- `reader_condition_ids_info`: Similar mapping for Kratos conditions.
+- `mdpa_geometry_ids_info`: Mapping for geometric entities in `Geometries` blocks.
+- `submodelpart_info`: Stores the hierarchical structure of `SubModelPart` blocks,
+  including their local data, tables, and raw entity ID lists.
+- `meshes`: Stores data for `Mesh` (multi-level) blocks.
+
+The writer prioritizes the information in `misc_data` (like original IDs) to
+reconstruct the MDPA file as closely as possible to the original. If
+`misc_data` is missing, the writer falls back to standard meshio data,
+generating sequential IDs and default block names.
 
 Unsupported MDPA Blocks:
 ------------------------
@@ -128,6 +135,7 @@ def _read_single_table(f, header_parts):
     return {"id": table_id, "variables": variables, "data": np.array(table_data_rows, dtype=float) if table_data_rows else np.empty((0, len(variables)))}
 
 _kratos_geometries_to_meshio_type = {
+    # Geometric entities (typically used for CAD/NURBS or reference geometries)
     "Line2D2": "line", "Line3D2": "line", "Triangle2D3": "triangle", "Triangle3D3": "triangle",
     "Quadrilateral2D4": "quad", "Quadrilateral3D4": "quad", "Tetrahedra3D4": "tetra",
     "Hexahedra3D8": "hexahedron", "Prism3D6": "wedge", "Line2D3": "line3", "Line3D3": "line3",
@@ -138,6 +146,8 @@ _kratos_geometries_to_meshio_type = {
 }
 
 _kratos_elements_to_meshio_type = {
+    # Standard Finite Elements in Kratos.
+    # Note: Many elements use the 'Element<Dim><NumNodes>N' naming convention.
     "Element2D1N": "vertex", "Element2D2N": "line", "Element2D3N": "triangle",
     "Element2D6N": "triangle6", "Element2D4N": "quad", "Element2D8N": "quad8",
     "Element2D9N": "quad9", "Element3D1N": "vertex", "Element3D2N": "line",
@@ -148,13 +158,14 @@ _kratos_elements_to_meshio_type = {
     "LineElement2D2N": "line", "LineElement2D3N": "line3", "LineElement3D2N": "line",
     "LineElement3D3N": "line3", "SurfaceElement3D3N": "triangle", "SurfaceElement3D6N": "triangle6",
     "SurfaceElement3D4N": "quad", "SurfaceElement3D8N": "quad8", "SurfaceElement3D9N": "quad9",
-    "Triangle2D3": "triangle", "Line2D2": "line", # Legacy/Common names without N
+    "Triangle2D3": "triangle", "Line2D2": "line", # Legacy/Common names without N suffix
     "Quadrilateral2D4": "quad", "Tetrahedra3D4": "tetra", "Hexahedra3D8": "hexahedron",
     "Triangle3D3": "triangle", "Line3D2": "line", "Quadrilateral3D4": "quad",
     "Hexahedra3D20": "hexahedron20", "Hexahedra3D27": "hexahedron27",
 }
 
 _kratos_conditions_to_meshio_type = {
+    # Boundary Conditions and entities for Load application in Kratos.
     "PointCondition2D1N": "vertex", "PointCondition3D1N": "vertex",
     "LineCondition2D2N": "line", "LineCondition2D3N": "line3",
     "LineCondition3D2N": "line", "LineCondition3D3N": "line3",
@@ -165,17 +176,18 @@ _kratos_conditions_to_meshio_type = {
 }
 
 _meshio_to_kratos_geometry_type = {v: k for k, v in _kratos_geometries_to_meshio_type.items()}
-# For elements and conditions, we pick a default Kratos type if multiple map to the same meshio type.
-# Usually the ones with "Element" or "Condition" in the name are preferred for specific blocks.
+
+# Pick a default Kratos name for each meshio cell type for Elemental and Conditional blocks.
+# Prefer names with "Element" or "Condition" for specific blocks to maintain Kratos conventions.
+# Note: Multiple Kratos types can map to one meshio type (e.g. Element2D3N and Element3D3N both map
+# to "triangle"). We select common defaults here.
 _meshio_to_kratos_element_type = {
     "vertex": "Element3D1N", "line": "Element3D2N", "triangle": "Element3D3N",
     "tetra": "Element3D4N", "pyramid": "Element3D5N", "wedge": "Element3D6N",
-    "hexahedron": "Element3D8N", "line3": "LineElement3D3N", "triangle6": "Element3D6N", # Wait, Element2D6N/3D6N? Element2D6N is tri6
+    "hexahedron": "Element3D8N", "line3": "LineElement3D3N", "triangle6": "Element2D6N",
     "quad": "Element2D4N", "quad8": "Element2D8N", "quad9": "Element2D9N",
     "tetra10": "Element3D10N", "hexahedron20": "Element3D20N", "hexahedron27": "Element3D27N",
 }
-# Correcting tri6 which was wrong above
-_meshio_to_kratos_element_type["triangle6"] = "Element2D6N"
 
 _meshio_to_kratos_condition_type = {
     "vertex": "PointCondition3D1N", "line": "LineCondition3D2N", "line3": "LineCondition3D3N",
@@ -183,21 +195,19 @@ _meshio_to_kratos_condition_type = {
     "quad": "SurfaceCondition3D4N", "quad8": "SurfaceCondition3D8N", "quad9": "SurfaceCondition3D9N",
 }
 
+# Map total number of nodes to a meshio cell type for basic inverse lookup.
+# This is used as a fallback if the Kratos entity name doesn't imply a specific type.
 inverse_num_nodes_per_cell = {v_nnodes: k_type for k_type, v_nnodes in num_nodes_per_cell.items()}
 
+# Helper for determining the dimension of a Kratos entity based on its name.
+# Standard Kratos names often contain "2D" or "3D". Default to 3D if unspecified.
 local_dimension_types = {}
 for k in _kratos_geometries_to_meshio_type:
-    if "3D" in k: local_dimension_types[k] = 3
-    elif "2D" in k: local_dimension_types[k] = 2
-    else: local_dimension_types[k] = 3
+    local_dimension_types[k] = 2 if "2D" in k else 3
 for k in _kratos_elements_to_meshio_type:
-    if "3D" in k: local_dimension_types[k] = 3
-    elif "2D" in k: local_dimension_types[k] = 2
-    else: local_dimension_types[k] = 3
+    local_dimension_types[k] = 2 if "2D" in k else 3
 for k in _kratos_conditions_to_meshio_type:
-    if "3D" in k: local_dimension_types[k] = 3
-    elif "2D" in k: local_dimension_types[k] = 2
-    else: local_dimension_types[k] = 3
+    local_dimension_types[k] = 2 if "2D" in k else 3
 
 
 def _parse_generic_data_block(f, block_end_str, variable_name_full,
@@ -630,9 +640,11 @@ def _prepare_cells(cells_list_of_tuples, cell_tags_dict):
     final_cells_for_mesh = []
     # Kratos to VTK node index permutations for hexahedron20 and hexahedron27 elements.
     # These are applied to convert MDPA's Kratos-specific node ordering to meshio's VTK-based ordering.
-    # We define the Kratos node IDs as they appear in a standard MDPA file for these elements,
-    # and use argsort to find the permutation to meshio (VTK) order.
+    # We define the Kratos node IDs as they appear in a standard MDPA file for these elements.
+    # The permutation maps Kratos index i to VTK index j.
+    # h20_kratos_nodes[i] gives the VTK index corresponding to Kratos node i.
     h20_kratos_nodes = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 13, 14, 15], dtype=int)
+    # We use argsort to find the permutation that transforms Kratos data to meshio (VTK) order.
     kratos_to_vtk_h20_perm = np.argsort(h20_kratos_nodes)
 
     h27_kratos_nodes = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 15, 14, 13, 20, 23, 21, 24, 22, 25, 26], dtype=int)
@@ -729,7 +741,9 @@ def read_buffer(f):
         A meshio.Mesh object. MDPA-specific data not fitting the standard mesh
         model is stored in `mesh.misc_data`. This includes:
         - `reader_element_ids_info`: List of (original_id, type_str, local_idx)
-          for elements, mapping Kratos IDs to meshio cell block structure.
+          for elements. Maps the original Kratos ID to its position in the meshio
+          `cells` list (specifically, which `CellBlock` type and the 0-based
+          index within that block's data array).
         - `reader_condition_ids_info`: Similar list for conditions.
         - `mdpa_geometry_ids_info`: Similar list for geometries.
         - `submodelpart_info`: Dict containing data for `SubModelPart` blocks,
@@ -1035,11 +1049,15 @@ def _compute_blocks_name(mesh, cells_to_iterate):
     Determines the entity type ("Elements" or "Conditions") and part name for cell blocks.
 
     This logic decides if a `CellBlock` from `mesh.cells` should be written as
-    an "Elements" block or a "Conditions" block in the MDPA file. It primarily
-    compares the dimension of the cell type with the overall dimension of the mesh
-    (inferred from `mesh.field_data` or defaulting to 3D).
-    It also tries to derive a part name, often using "gmsh:physical" tags if present
-    and mapped to named physical groups in `mesh.field_data`.
+    an "Elements" block or a "Conditions" block in the MDPA file. It compares
+    the dimension of the cell type with the overall dimension of the mesh
+    (inferred from `mesh.field_data` or defaulting to 3D). If the cell dimension
+    equals the mesh dimension, it's typically an "Element"; otherwise, it's a
+    "Condition".
+
+    It also derives a part name for each block. If "gmsh:physical" tags are present,
+    it maps them to physical group names stored in `mesh.field_data`. If no tags
+    are present, it assigns a default sequential part name.
 
     Parameters
     ----------
@@ -1459,12 +1477,15 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
     Writes a meshio.Mesh object to a Kratos MDPA file.
 
     This function serializes a `Mesh` object into the MDPA format. It attempts
-    to preserve MDPA-specific information stored in `mesh.misc_data` (e.g.,
-    SubModelPart structure, Mesh blocks, original entity IDs if available from
-    `reader_element_ids_info`, etc.) for better round-trip fidelity.
+    to preserve MDPA-specific information stored in `mesh.misc_data` for better
+    round-trip fidelity. This includes:
+    - Reconstructing the hierarchical `SubModelPart` tree.
+    - Preserving original Kratos IDs for nodes, elements, conditions, and geometries.
+    - Restoring `Mesh` (multi-level) blocks.
+    - Writing `Properties` and `Tables` from `mesh.field_data`.
 
     Node ordering for Kratos-specific elements (e.g., hexahedron20, hexahedron27)
-    is converted from meshio's VTK-based ordering to Kratos-specific ordering.
+    is converted from meshio's VTK-based ordering back to Kratos-specific ordering.
 
     Parameters
     ----------
@@ -1494,8 +1515,8 @@ def write(filename, mesh, float_fmt=".16e", binary=False):
 
     # VTK to Kratos permutations. These are the inverses of the Kratos-to-VTK
     # permutations applied in `_prepare_cells`.
-    # Kratos Node i is VTK node h20_kratos_nodes[i].
-    # So to write in Kratos order, we take nodes at these VTK indices.
+    # To write in Kratos order, we need to map VTK index j back to Kratos index i.
+    # We define the mapping explicitly: h20_kratos_nodes[i] is the VTK index for Kratos node i.
     h20_kratos_nodes = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 10, 9, 16, 19, 18, 17, 12, 13, 14, 15], dtype=int)
     vtk_to_kratos_h20_perm = h20_kratos_nodes
 
