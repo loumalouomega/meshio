@@ -1931,6 +1931,38 @@ def _register_training(server: FastMCP) -> None:
             output_dir=output_dir,
         )
 
+    @server.tool()
+    def predict_file(
+        checkpoint: str,
+        input_path: str,
+        output_path: str,
+        time_step: Optional[int] = None,
+        target_path: Optional[str] = None,
+        input_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        device: str = "auto",
+    ) -> dict:
+        """Predict with a trained .mdlus checkpoint on ONE mesh file — no
+        manifest, no split, no entry, for a mesh that was never catalogued.
+        Everything the prediction needs comes from the checkpoint's own model
+        card: which model family wrote it, the sample options, the read
+        options, the column contract and the normalization. time_step picks a
+        step of a multi-step input; target_path supplies the paired mesh a
+        t->t+n or coarse/fine checkpoint compares against. A file carrying no
+        truth predicts anyway, with rmse/max_error reported as null rather
+        than measured against itself. Needs the frameworks."""
+        return _guard(
+            _tools.tool_predict_file,
+            checkpoint=checkpoint,
+            input_path=input_path,
+            output_path=output_path,
+            time_step=time_step,
+            target_path=target_path,
+            input_format=input_format,
+            output_format=output_format,
+            device=device,
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Gated tools (optional extras)                                               #

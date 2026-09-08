@@ -1254,6 +1254,24 @@ def test_subsample_tool_writes_a_point_cloud_and_is_json_safe(tmp_path):
     assert "count is 1000 but only 98" in guarded["error"]
 
 
+def test_predict_file_tool_is_gated_and_guarded(tmp_path):
+    src = str(tmp_path / "grid.vtu")
+    meshioplusplus.write(src, meshioplusplus.grid((2, 2, 2)))
+    checkpoint = tmp_path / "model.mdlus"
+    checkpoint.write_bytes(b"")
+
+    assert _tools.TOOL_REGISTRY["predict_file"]["gated"] == "physicsnemo"
+    guarded = _tools.guard(
+        _tools.tool_predict_file,
+        checkpoint=str(checkpoint),
+        input_path=src,
+        output_path=str(tmp_path / "out.vtu"),
+    )
+    # Without the frameworks it is a named payload, never a traceback.
+    assert guarded["error_type"] == "ImportError"
+    assert "nvidia-physicsnemo" in guarded["error"]
+
+
 def test_proximity_graph_tool_writes_the_graph_and_reports_degrees(tmp_path):
     src = str(tmp_path / "grid.vtu")
     meshioplusplus.write(src, meshioplusplus.grid((4, 4, 4)))

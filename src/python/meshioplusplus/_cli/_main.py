@@ -28,6 +28,7 @@ from . import (
     _partition,
     _pipeline,
     _point_budget,
+    _predict,
     _proximity,
     _quality,
     _refine,
@@ -207,6 +208,13 @@ def main(argv=None):
     )
     _proximity.add_args(parser)
     parser.set_defaults(func=_proximity.proximity_cmd)
+
+    parser = subparsers.add_parser(
+        "predict",
+        help="Run a trained PhysicsNeMo checkpoint on one mesh file",
+    )
+    _predict.add_args(parser)
+    parser.set_defaults(func=_predict.predict_cmd)
 
     parser = subparsers.add_parser(
         "sdf",

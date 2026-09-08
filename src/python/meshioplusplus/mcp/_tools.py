@@ -2506,6 +2506,48 @@ def tool_train_predict(
     )
 
 
+def tool_predict_file(
+    checkpoint,
+    input_path,
+    output_path,
+    time_step=None,
+    target_path=None,
+    input_format=None,
+    output_format=None,
+    device="auto",
+):
+    """Predict with a trained .mdlus checkpoint on ONE mesh file -- no
+    manifest, no split, no entry. A file carrying no truth predicts anyway,
+    with rmse/max_error reported as null. Needs the frameworks.
+    """
+    resolved_checkpoint = _resolve(checkpoint, must_exist=True)
+    resolved_input = _resolve(input_path, must_exist=True)
+    resolved_target = _resolve(target_path, must_exist=True) if target_path else None
+    resolved_output = _resolve(output_path, for_write=True)
+    from .._gpu import _require_framework
+
+    _require_framework(
+        "predict_file",
+        "physicsnemo",
+        "pip install nvidia-physicsnemo",
+        doc=_PHYSICSNEMO_DOC,
+    )
+    from ..physicsnemo import predict_file
+
+    return _json_safe(
+        predict_file(
+            resolved_checkpoint,
+            resolved_input,
+            resolved_output,
+            time_step=None if time_step is None else int(time_step),
+            target_path=resolved_target,
+            input_format=input_format,
+            output_format=output_format,
+            device=device,
+        )
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Gated tools (optional extras; the wrapped functions raise the named error)  #
 # --------------------------------------------------------------------------- #
@@ -2825,6 +2867,10 @@ TOOL_REGISTRY = OrderedDict(
         (
             "train_mark_best",
             {"fn": tool_train_mark_best, "wraps": (), "gated": None},
+        ),
+        (
+            "predict_file",
+            {"fn": tool_predict_file, "wraps": (), "gated": "physicsnemo"},
         ),
         (
             "train_predict",

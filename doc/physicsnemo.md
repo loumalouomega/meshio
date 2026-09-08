@@ -238,6 +238,25 @@ Everything the run *writes* is a machine artefact and is snake_case (the [`write
 
 Two details worth knowing. The model is sized from the **recorded schema**, not from `len(Fields)`: with `Graph.Regions` on, the region one-hots widen `x`, and sizing from the field count alone would build the wrong first layer. And `SIGTERM` is honoured — the running epoch finishes, `final.mdlus` and its card are written, and the process exits 143 — which is what makes the dashboard's *Stop* button leave a usable checkpoint rather than a truncated one.
 
+### Single-mesh inference
+
+`predict` needs a manifest, a split and an entry. Once a model is trained, applying it to *one* mesh that was never catalogued anywhere should not require inventing a manifest for it, and three forms do that:
+
+```python
+row = mpn.predict_file(checkpoint, "part.vtu", "part_pred.vtu")   # a file
+mesh, row = mpn.predict_mesh(checkpoint, mesh)                    # in memory
+```
+
+```bash
+meshioplusplus predict runs/example/checkpoints/best.mdlus part.vtu part_pred.vtu
+```
+
+Everything the prediction needs comes from the checkpoint's own **card**: which family wrote it (so a grid checkpoint needs no different call), the sample options, the read options, the column contract and the normalization. Nothing consults a manifest — which is exactly why `predict` itself is now a loop over the same per-mesh body, and why the two cannot drift.
+
+`time_step` picks a step of a multi-step input and `target_path` supplies the paired mesh a t→t+n or coarse/fine checkpoint compares against. **A mesh carrying no truth predicts anyway**: the `<column>_pred` arrays are written, no `<column>_error` arrays are, and `rmse`/`max_error` come back `None`. That rule matters more than it looks — with the target fields absent, `graph_sample` would otherwise quietly take `y` from the input's own step and report an "error" of a prediction against itself.
+
+The MCP `predict_file` tool is the same function, and `predict` inherits the rule: an entry whose meshes lack the target field now predicts with a `None` rmse instead of raising.
+
 ## Superresolution: the `srresnet` family
 
 `TrainSpec` knows two model families, and they read different blocks. `Model.Name: "srresnet"` trains `physicsnemo.models.srrn.SRResNet` on the coarse/fine grid pairs [`grid_sample_pair`](#grid-samples) produces:

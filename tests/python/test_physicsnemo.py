@@ -591,6 +591,43 @@ def test_run_training_and_predict_end_to_end(tmp_path):
     mesh = meshioplusplus.read(row["output_path"])
     assert {"v_0_pred", "v_1_pred", "v_0_error", "v_1_error"} <= set(mesh.point_data)
     assert mesh.point_data["v_0_pred"].shape == (4,)
+    # v10.32.0: the SAME row from the single-mesh path -- no manifest, no
+    # split, no entry. Equality here is what pins the extraction of the
+    # per-mesh body out of predict()'s loop as behaviour-preserving.
+    single = mpn.predict_file(
+        progress["best_checkpoint"],
+        str(tmp_path / "cases" / "case_3.vtu"),
+        str(out / "single.vtu"),
+    )
+    assert single["num_rows"] == row["num_rows"]
+    assert single["rmse"] == pytest.approx(row["rmse"])
+    assert single["max_error"] == pytest.approx(row["max_error"])
+    single_mesh = meshioplusplus.read(single["output_path"])
+    for name in ("v_0_pred", "v_1_pred"):
+        assert np.allclose(single_mesh.point_data[name], mesh.point_data[name])
+
+    # A mesh that carries no truth predicts anyway, and says so rather than
+    # measuring an error against its own input.
+    truthless = _mesh(3.0)
+    del truthless.point_data["v"]
+    meshioplusplus.write(str(tmp_path / "truthless.vtu"), truthless)
+    bare = mpn.predict_file(
+        progress["best_checkpoint"],
+        str(tmp_path / "truthless.vtu"),
+        str(out / "bare.vtu"),
+    )
+    assert bare["rmse"] is None and bare["max_error"] is None
+    bare_mesh = meshioplusplus.read(bare["output_path"])
+    assert {"v_0_pred", "v_1_pred"} <= set(bare_mesh.point_data)
+    assert not any(k.endswith("_error") for k in bare_mesh.point_data)
+
+    # and the in-memory form gives the same arrays as the file one
+    in_memory, in_row = mpn.predict_mesh(progress["best_checkpoint"], _mesh(3.0))
+    assert in_row["num_rows"] == row["num_rows"]
+    assert np.allclose(
+        in_memory.point_data["v_0_pred"], single_mesh.point_data["v_0_pred"]
+    )
+
     # a periodic checkpoint predicts too (it carries a card as well)
     again = mpn.predict(
         periodic[0]["path"], manifest_path, split="test", output_dir=str(out / "p")
@@ -944,3 +981,25 @@ def test_a_batch_keeps_the_two_edge_sets_apart(tmp_path):
     # whole reason the two sets are kept apart rather than concatenated.
     assert int(batch.world_edge_index.max()) >= n
     assert int(batch.edge_index.max()) >= n
+
+
+# --------------------------------------------------------------------------- #
+# single-mesh inference (v10.32.0)                                            #
+# --------------------------------------------------------------------------- #
+def test_single_mesh_prediction_names_the_missing_framework(monkeypatch):
+    # Without the frameworks the entry points fail by name and do not mention a
+    # meshioplusplus extra, because there deliberately is none. Monkeypatched
+    # rather than skipped, so the assertion holds on a box that HAS them --
+    # the `test_install_errors_name_the_command_and_no_extra` convention.
+    monkeypatch.setattr(_gpu, "_importable", lambda module: False)
+    with pytest.raises(ImportError) as excinfo:
+        mpn.predict_file("model.mdlus", "in.vtu", "out.vtu")
+    message = str(excinfo.value)
+    assert "nvidia-physicsnemo" in message and "meshioplusplus[" not in message
+    with pytest.raises(ImportError, match="nvidia-physicsnemo"):
+        mpn.predict_mesh("model.mdlus", _mesh())
+
+
+def test_single_mesh_prediction_is_exported():
+    for name in ("predict_mesh", "predict_file"):
+        assert name in mpn.__all__ and hasattr(mpn, name)

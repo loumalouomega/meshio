@@ -77,7 +77,11 @@ Each stage is one of the shipped surfaces, nothing bespoke:
 - **`infer.py`** calls `mpn.predict` with the best checkpoint: it loads the
   card, checks the recorded feature schema against what the mesh yields (the
   drift guard), and writes `T_pred`/`T_error` back into `.vtu` files any mesh
-  tool can open. This script adds only the panel below.
+  tool can open. This script adds only the panel below. It predicts over the
+  whole test *split*, which is what `predict` is for; to run the same
+  checkpoint on one mesh that was never in the manifest, use
+  `meshioplusplus predict runs/example/checkpoints/best.mdlus part.vtu
+  part_pred.vtu` (or `mpn.predict_file`), which needs no manifest at all.
 
 The stats files committed at the top of this directory are copies of that
 run's own (`runs/example/` is generated, and gitignored).

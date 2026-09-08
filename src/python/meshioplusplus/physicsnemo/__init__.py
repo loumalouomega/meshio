@@ -56,6 +56,8 @@ __all__ = [
     "load_spec",
     "run_training",
     "predict",
+    "predict_mesh",
+    "predict_file",
 ]
 
 # Version 2 (v9.30.0): the schema gained `target_offset`/`target_delta` --
@@ -1122,5 +1124,56 @@ def predict(
         split=split,
         step=step,
         output_dir=output_dir,
+        device=device,
+    )
+
+
+def predict_mesh(checkpoint, mesh, *, target_mesh=None, device="auto", label="mesh"):
+    """Predict with a trained ``.mdlus`` checkpoint on ONE in-memory mesh,
+    returning ``(mesh, row)`` -- the mesh carrying ``<column>_pred`` (and
+    ``<column>_error`` where the truth is present) plus a report row. The
+    card says which family wrote the checkpoint, so a caller does not have
+    to, and nothing here consults a manifest. Needs ``nvidia-physicsnemo``
+    (and ``torch_geometric`` for a graph checkpoint)."""
+    _require_framework(
+        "predict_mesh", "physicsnemo", "pip install nvidia-physicsnemo", doc=_DOC
+    )
+    from .train import predict_mesh as _predict_mesh
+
+    return _predict_mesh(
+        checkpoint, mesh, target_mesh=target_mesh, device=device, label=label
+    )
+
+
+def predict_file(
+    checkpoint,
+    input_path,
+    output_path,
+    *,
+    time_step=None,
+    target_path=None,
+    input_format=None,
+    output_format=None,
+    device="auto",
+):
+    """Predict with a trained ``.mdlus`` checkpoint on ONE mesh file, writing
+    the result. The single-mesh counterpart of :func:`predict`: no manifest,
+    no split, no entry -- point a checkpoint at a file that was never
+    catalogued and get the prediction written back. A file carrying no truth
+    predicts anyway, with ``rmse``/``max_error`` reported ``None``. Needs
+    ``nvidia-physicsnemo`` (and ``torch_geometric`` for a graph checkpoint)."""
+    _require_framework(
+        "predict_file", "physicsnemo", "pip install nvidia-physicsnemo", doc=_DOC
+    )
+    from .train import predict_file as _predict_file
+
+    return _predict_file(
+        checkpoint,
+        input_path,
+        output_path,
+        time_step=time_step,
+        target_path=target_path,
+        input_format=input_format,
+        output_format=output_format,
         device=device,
     )

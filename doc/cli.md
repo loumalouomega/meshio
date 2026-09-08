@@ -1302,6 +1302,23 @@ meshioplusplus proximity-graph particles.vtu graph.vtu --radius 0.015 --box 2.0 
 
 The graph is written as `line` cells over those positions with a `degree` point array, and the summary prints the vertex and edge counts, the degree spread and how many vertices came out isolated — the numbers that say whether the radius was well chosen. See [proximity graphs](proximity_graphs.md).
 
+## `predict`
+
+Run a trained PhysicsNeMo checkpoint on one mesh file — no manifest, no split, no entry.
+
+```bash
+meshioplusplus predict runs/example/checkpoints/best.mdlus part.vtu part_pred.vtu
+meshioplusplus predict best.mdlus series.xdmf step_pred.vtu --time-step 4
+```
+
+| flag | meaning |
+|---|---|
+| `--time-step N` | which step of a multi-step input to predict on (default the first) |
+| `--target PATH` | the paired mesh a t→t+n or coarse/fine checkpoint compares against |
+| `--device auto\|cpu\|cuda[:N]` | where to run (default `auto`) |
+
+Everything else comes from the checkpoint's own model card, including which model family wrote it. A mesh carrying no truth predicts anyway, and the summary says the error was not measured rather than reporting one against the input itself. Needs `nvidia-physicsnemo` (and `torch_geometric` for a graph checkpoint); without them the verb fails by name and returns 1. See [PhysicsNeMo integration](physicsnemo.md#single-mesh-inference).
+
 ## `sdf`
 
 ```bash

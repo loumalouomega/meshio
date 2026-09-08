@@ -606,6 +606,264 @@ def _epoch_loop(
     return progress
 
 
+class _Loaded:
+    """One checkpoint, loaded once: the model, its card, its normalizers.
+
+    ``predict`` over a manifest pays for this once and reuses it per entry;
+    ``predict_mesh`` pays for it per call, which is what a one-off inference
+    is. The family comes from the card, so no caller has to say which
+    ``predict`` it wants.
+    """
+
+    __slots__ = ("model", "card", "norms", "device", "family")
+
+    def __init__(self, model, card, norms, device, family):
+        self.model = model
+        self.card = card
+        self.norms = norms
+        self.device = device
+        self.family = family
+
+
+def _load_checkpoint(checkpoint, device="auto") -> _Loaded:
+    """Load a ``.mdlus`` and its card, and require only what its family needs."""
+    checkpoint = str(checkpoint)
+    card = read_json(card_path(checkpoint))
+    if not isinstance(card, dict):
+        raise ValueError(
+            f"{_ERR}no model card beside '{checkpoint}' ({card_path(checkpoint)}); "
+            "only checkpoints written by this trainer carry one"
+        )
+    family = card.get("model", {}).get("name", "meshgraphnet")
+    if family == "srresnet" and card.get("layout") not in (
+        None,
+        "channels_first_zyx",
+    ):
+        raise ValueError(
+            f"{_ERR}the card records layout {card['layout']!r}, which this build "
+            "does not know how to read"
+        )
+    _frameworks("predict", family)
+    from physicsnemo.core.module import Module
+
+    device = _device(device)
+    model = Module.from_checkpoint(checkpoint).to(device)
+    model.eval()
+    norms = (
+        _grid_norm_tensors(card, device)
+        if family == "srresnet"
+        else _norm_tensors(card, device)
+    )
+    return _Loaded(model, card, norms, device, family)
+
+
+def _available_targets(mesh, card, location):
+    """Whether this mesh actually carries the card's target fields.
+
+    A mesh that was never in a manifest usually has no truth in it, and
+    ``graph_sample`` would then quietly take ``y`` from the input's own step --
+    an "error" against itself. Absent truth means no ``y``, no ``_error``
+    arrays and a ``None`` rmse, which is the honest answer.
+    """
+    data = mesh.point_data if location == "point" else mesh.cell_data
+    return all(name in data for name in card.get("target_fields", ()))
+
+
+def _predict_graph_mesh(loaded, mesh, target_mesh=None, label="mesh"):
+    """One mesh through a graph checkpoint -> ``(mesh, row)``; no file I/O."""
+    import torch
+    from torch_geometric.data import Data
+
+    card, norms, device = loaded.card, loaded.norms, loaded.device
+    graph_kwargs = dict(card["graph"])
+    kind = graph_kwargs.get("kind", "node")
+    location = "point" if kind == "node" else "cell"
+    y_columns = list(card["y_columns"])
+    if target_mesh is None and (
+        graph_kwargs.get("target_offset", 0)
+        or not _available_targets(mesh, card, location)
+    ):
+        graph_kwargs["target_fields"] = None
+        graph_kwargs["target_delta"] = False
+
+    sample = graph_sample(mesh, target_mesh=target_mesh, **graph_kwargs)
+    if list(sample.x_columns) != list(card["x_columns"]):
+        raise ValueError(
+            f"{_ERR}feature drift: the checkpoint was trained on x columns "
+            f"{card['x_columns']} but {label} yields {list(sample.x_columns)}"
+        )
+    arrays = sample.arrays
+    with torch.no_grad():
+        x = (torch.from_numpy(arrays["x"]).to(device) - norms["x_mean"]) / norms[
+            "x_std"
+        ]
+        edge_attr = (
+            torch.from_numpy(arrays["edge_attr"]).to(device) - norms["e_mean"]
+        ) / norms["e_std"]
+        graph = Data(
+            x=x,
+            edge_index=torch.from_numpy(arrays["edge_index"]).to(device),
+            edge_attr=edge_attr,
+        )
+        pred_norm = loaded.model(x, edge_attr, graph)
+        pred = (
+            (pred_norm * norms["y_std"] + norms["y_mean"])
+            .cpu()
+            .numpy()
+            .astype(np.float64)
+        )
+    truth = arrays.get("y")
+    truth = None if truth is None else np.asarray(truth, dtype=np.float64)
+    for i, column in enumerate(y_columns):
+        _attach(mesh, kind, f"{column}_pred", pred[:, i])
+        if truth is not None:
+            _attach(mesh, kind, f"{column}_error", np.abs(pred[:, i] - truth[:, i]))
+    error = None if truth is None else np.abs(pred - truth)
+    row = {
+        "num_rows": int(pred.shape[0]),
+        "rmse": (None if error is None else float(math.sqrt(float(np.mean(error**2))))),
+        "max_error": None if error is None else float(error.max()),
+    }
+    return mesh, row
+
+
+def _predict_grid_mesh(loaded, mesh, target_mesh=None, label="mesh"):
+    """One mesh through a grid checkpoint -> ``(mesh, row)``; no file I/O."""
+    import torch
+
+    from .._grid_transfer import GridArray, GridSpec, scatter_grid
+    from . import grid_sample_pair
+
+    card, norms, device = loaded.card, loaded.norms, loaded.device
+    grid_kwargs = dict(card["grid"])
+    x_channels = list(card["x_channels"])
+    y_channels = list(card["y_channels"])
+    if target_mesh is None and not _available_targets(mesh, card, "point"):
+        grid_kwargs["target_fields"] = None
+
+    sample = grid_sample_pair(mesh, target_mesh=target_mesh, **grid_kwargs)
+    if list(sample.x_channels) != x_channels:
+        raise ValueError(
+            f"{_ERR}{label} produces channels {list(sample.x_channels)} but the "
+            f"checkpoint was trained on {x_channels}"
+        )
+    x = torch.from_numpy(sample.arrays["x"]).float().unsqueeze(0).to(device)
+    with torch.no_grad():
+        pred = loaded.model((x - norms["x_mean"]) / norms["x_std"])
+    pred = (pred * norms["y_std"] + norms["y_mean"])[0].cpu().numpy()
+
+    truth = sample.arrays.get("y")
+    if truth is not None and pred.shape != truth.shape:
+        raise ValueError(
+            f"{_ERR}{label}: the model emitted {pred.shape} but the target grid "
+            f"is {truth.shape}; the checkpoint's scaling factor does not match "
+            "the pair this spec builds"
+        )
+    fine = GridSpec.from_dict(sample.schema["fine"])
+    out_mesh = scatter_grid(
+        GridArray(pred, fine, tuple(y_channels)),
+        target_mesh if target_mesh is not None else mesh,
+        names=[f"{c}_pred" for c in y_channels],
+    )
+    row = {
+        "num_rows": int(pred.reshape(pred.shape[0], -1).shape[1]),
+        "coverage": sample.schema.get("y_coverage"),
+    }
+    if truth is not None:
+        error = pred - truth
+        row["rmse"] = float(np.sqrt(np.mean(np.square(error))))
+        row["max_error"] = float(np.max(np.abs(error)))
+        row["spectrum_rel_l2"] = _spectrum_rel_l2(pred, truth, fine)
+        truth_mesh = scatter_grid(
+            GridArray(truth, fine, tuple(y_channels)),
+            out_mesh,
+            names=[f"{c}_true" for c in y_channels],
+            on_conflict="overwrite",
+        )
+        out_mesh = scatter_grid(
+            GridArray(error, fine, tuple(y_channels)),
+            truth_mesh,
+            names=[f"{c}_error" for c in y_channels],
+            on_conflict="overwrite",
+        )
+    else:
+        row["rmse"] = None
+        row["max_error"] = None
+    return out_mesh, row
+
+
+def predict_mesh(checkpoint, mesh, *, target_mesh=None, device="auto", label="mesh"):
+    """Predict with a checkpoint on ONE in-memory mesh -> ``(mesh, row)``.
+
+    The card says which family wrote the checkpoint, so a caller does not have
+    to. Everything the prediction needs -- the sample options, the read
+    options, the column contract, the normalization -- comes from the card;
+    nothing here consults a manifest. A mesh carrying no truth predicts anyway,
+    with ``rmse``/``max_error`` reported as ``None`` rather than measured
+    against itself.
+    """
+    loaded = _load_checkpoint(checkpoint, device)
+    body = _predict_grid_mesh if loaded.family == "srresnet" else _predict_graph_mesh
+    return body(loaded, mesh, target_mesh, label)
+
+
+def predict_file(
+    checkpoint,
+    input_path,
+    output_path,
+    *,
+    time_step: Optional[int] = None,
+    target_path=None,
+    input_format: Optional[str] = None,
+    output_format: Optional[str] = None,
+    device: str = "auto",
+) -> dict:
+    """Predict with a checkpoint on ONE mesh file, writing the result.
+
+    The single-mesh counterpart of :func:`predict`: no manifest, no split, no
+    entry -- point a trained checkpoint at a file that was never catalogued
+    anywhere and get the prediction written back as ordinary data arrays.
+
+    ``time_step`` selects a step of a multi-step file. ``target_path`` supplies
+    the paired mesh a t->t+n or coarse/fine checkpoint compares against; with
+    no target and no truth in the file the prediction is still written, and
+    ``rmse``/``max_error`` come back ``None``.
+    """
+    from .._sequence import TimeSeries
+
+    loaded = _load_checkpoint(checkpoint, device)
+    read_kwargs = dict(loaded.card.get("read", {}))
+    if input_format is not None:
+        read_kwargs["file_format"] = input_format
+    series = TimeSeries(input_path, **read_kwargs)
+    step = 0 if time_step is None else int(time_step)
+    if step < 0:
+        step += len(series)
+    if not 0 <= step < len(series):
+        raise ValueError(
+            f"{_ERR}'{input_path}' has {len(series)} step(s); step {time_step} "
+            "is out of range"
+        )
+    time_value, mesh = series[step]
+
+    target_mesh = None
+    if target_path is not None:
+        target_mesh = TimeSeries(target_path, **read_kwargs)[step][1]
+    elif loaded.family != "srresnet":
+        offset = int(dict(loaded.card["graph"]).get("target_offset", 0))
+        if offset and step + offset < len(series):
+            target_mesh = series[step + offset][1]
+
+    label = f"'{input_path}'"
+    body = _predict_grid_mesh if loaded.family == "srresnet" else _predict_graph_mesh
+    out, row = body(loaded, mesh, target_mesh, label)
+    write(output_path, out, file_format=output_format)
+    row["input_path"] = str(input_path)
+    row["output_path"] = str(output_path)
+    row["time"] = None if time_value is None else float(time_value)
+    return row
+
+
 def predict(
     checkpoint,
     manifest,
@@ -619,10 +877,14 @@ def predict(
     """Predict with a ``.mdlus`` checkpoint (plus its card) over a manifest's
     entries and write each prediction back as ordinary data arrays --
     ``<column>_pred`` and, where the truth is present, ``<column>_error`` --
-    into ``output_dir/<entry_id>.vtu``. Returns one row per entry."""
-    card_file = card_path(str(checkpoint))
-    card = read_json(card_file)
-    if card and card.get("model", {}).get("name") == "srresnet":
+    into ``output_dir/<entry_id>.vtu``. Returns one row per entry.
+
+    A loop over :func:`predict_mesh`'s own per-mesh body: the manifest supplies
+    which meshes to read and nothing else, which is why
+    :func:`predict_file` can do the same job for a file that was never
+    catalogued."""
+    loaded = _load_checkpoint(checkpoint, device)
+    if loaded.family == "srresnet":
         return predict_grid(
             checkpoint,
             manifest,
@@ -632,27 +894,9 @@ def predict(
             output_dir=output_dir,
             device=device,
         )
-    _frameworks("predict")
-    import torch
-    from physicsnemo.core.module import Module
-    from torch_geometric.data import Data
-
-    checkpoint = str(checkpoint)
-    card = read_json(card_path(checkpoint))
-    if not isinstance(card, dict):
-        raise ValueError(
-            f"{_ERR}no model card beside '{checkpoint}' ({card_path(checkpoint)}); "
-            "only checkpoints written by this trainer carry one"
-        )
-    device = _device(device)
-    model = Module.from_checkpoint(checkpoint).to(device)
-    model.eval()
-    norms = _norm_tensors(card, device)
-    graph_kwargs = dict(card["graph"])
+    card = loaded.card
     read_kwargs = dict(card.get("read", {}))
-    offset = int(graph_kwargs.get("target_offset", 0))
-    kind = graph_kwargs.get("kind", "node")
-    y_columns = list(card["y_columns"])
+    offset = int(dict(card["graph"]).get("target_offset", 0))
 
     if not isinstance(manifest, DatasetManifest):
         manifest = DatasetManifest.load(manifest)
@@ -677,57 +921,17 @@ def predict(
             )
         time_value, mesh = series[step]
         target_mesh = series[step + offset][1] if offset else None
-        sample = graph_sample(mesh, target_mesh=target_mesh, **graph_kwargs)
-        if list(sample.x_columns) != list(card["x_columns"]):
-            raise ValueError(
-                f"{_ERR}feature drift: the checkpoint was trained on x columns "
-                f"{card['x_columns']} but entry '{entry.id}' yields {list(sample.x_columns)}"
-            )
-        arrays = sample.arrays
-        with torch.no_grad():
-            x = (torch.from_numpy(arrays["x"]).to(device) - norms["x_mean"]) / norms[
-                "x_std"
-            ]
-            edge_attr = (
-                torch.from_numpy(arrays["edge_attr"]).to(device) - norms["e_mean"]
-            ) / norms["e_std"]
-            graph = Data(
-                x=x,
-                edge_index=torch.from_numpy(arrays["edge_index"]).to(device),
-                edge_attr=edge_attr,
-            )
-            pred_norm = model(x, edge_attr, graph)
-            pred = (
-                (pred_norm * norms["y_std"] + norms["y_mean"])
-                .cpu()
-                .numpy()
-                .astype(np.float64)
-            )
-        truth = arrays.get("y")
-        truth = None if truth is None else np.asarray(truth, dtype=np.float64)
-        for i, column in enumerate(y_columns):
-            _attach(mesh, kind, f"{column}_pred", pred[:, i])
-            if truth is not None:
-                _attach(mesh, kind, f"{column}_error", np.abs(pred[:, i] - truth[:, i]))
+        mesh, row = _predict_graph_mesh(
+            loaded, mesh, target_mesh, f"entry '{entry.id}'"
+        )
         name = f"{entry.id}.vtu" if step == 0 else f"{entry.id}_s{step}.vtu"
         out_path = os.path.join(output_dir, name)
         write(out_path, mesh)
-        error = None if truth is None else np.abs(pred - truth)
-        rows.append(
-            {
-                "entry_id": entry.id,
-                "time": float(time_value),
-                "output_path": out_path,
-                "num_rows": int(pred.shape[0]),
-                "rmse": (
-                    None
-                    if error is None
-                    else float(math.sqrt(float(np.mean(error**2))))
-                ),
-                "max_error": None if error is None else float(error.max()),
-            }
-        )
-        del mesh, target_mesh, sample
+        row["entry_id"] = entry.id
+        row["time"] = float(time_value)
+        row["output_path"] = out_path
+        rows.append(row)
+        del mesh, target_mesh
     return rows
 
 
@@ -751,34 +955,8 @@ def predict_grid(
     ``.vtu`` that every viewer already understands and the dashboard's
     prediction preview needs no change to show.
     """
-    import torch
-
-    from .._grid_transfer import GridArray, GridSpec, scatter_grid
-    from . import grid_sample_pair
-
-    _frameworks("predict", "srresnet")
-    from physicsnemo.core.module import Module
-
-    card_file = card_path(str(checkpoint))
-    card = read_json(card_file)
-    if not card:
-        raise ValueError(
-            f"{_ERR}no model card beside {checkpoint} (expected {card_file}); a "
-            "checkpoint without one does not say what its channels mean"
-        )
-    if card.get("layout") not in (None, "channels_first_zyx"):
-        raise ValueError(
-            f"{_ERR}the card records layout {card['layout']!r}, which this build "
-            "does not know how to read"
-        )
-    model = Module.from_checkpoint(str(checkpoint)).to(device := _device(device))
-    model.eval()
-    norms = _grid_norm_tensors(card, device)
-
-    grid_kwargs = dict(card["grid"])
-    read_kwargs = dict(card.get("read", {}))
-    x_channels = list(card["x_channels"])
-    y_channels = list(card["y_channels"])
+    loaded = _load_checkpoint(checkpoint, device)
+    read_kwargs = dict(loaded.card.get("read", {}))
 
     manifest = DatasetManifest.load(manifest)
     entries = list(manifest.entries(split=split))
@@ -794,58 +972,14 @@ def predict_grid(
         target_mesh = (
             entry.target_time_series(**read_kwargs)[step][1] if entry.target else None
         )
-        sample = grid_sample_pair(mesh, target_mesh=target_mesh, **grid_kwargs)
-        if list(sample.x_channels) != x_channels:
-            raise ValueError(
-                f"{_ERR}entry '{entry.id}' produces channels "
-                f"{list(sample.x_channels)} but the checkpoint was trained on "
-                f"{x_channels}"
-            )
-        x = torch.from_numpy(sample.arrays["x"]).float().unsqueeze(0).to(device)
-        with torch.no_grad():
-            pred = model((x - norms["x_mean"]) / norms["x_std"])
-        pred = (pred * norms["y_std"] + norms["y_mean"])[0].cpu().numpy()
-
-        truth = sample.arrays.get("y")
-        if truth is not None and pred.shape != truth.shape:
-            raise ValueError(
-                f"{_ERR}entry '{entry.id}': the model emitted {pred.shape} but the "
-                f"target grid is {truth.shape}; the checkpoint's scaling factor "
-                "does not match the pair this spec builds"
-            )
-
-        fine = GridSpec.from_dict(sample.schema["fine"])
-        out_mesh = scatter_grid(
-            GridArray(pred, fine, tuple(y_channels)),
-            target_mesh if target_mesh is not None else mesh,
-            names=[f"{c}_pred" for c in y_channels],
+        out_mesh, row = _predict_grid_mesh(
+            loaded, mesh, target_mesh, f"entry '{entry.id}'"
         )
-        row = {
-            "entry_id": entry.id,
-            "time": time_value,
-            "num_rows": int(pred.reshape(pred.shape[0], -1).shape[1]),
-            "coverage": sample.schema.get("y_coverage"),
-        }
-        if truth is not None:
-            error = pred - truth
-            row["rmse"] = float(np.sqrt(np.mean(np.square(error))))
-            row["max_error"] = float(np.max(np.abs(error)))
-            row["spectrum_rel_l2"] = _spectrum_rel_l2(pred, truth, fine)
-            truth_mesh = scatter_grid(
-                GridArray(truth, fine, tuple(y_channels)),
-                out_mesh,
-                names=[f"{c}_true" for c in y_channels],
-                on_conflict="overwrite",
-            )
-            out_mesh = scatter_grid(
-                GridArray(error, fine, tuple(y_channels)),
-                truth_mesh,
-                names=[f"{c}_error" for c in y_channels],
-                on_conflict="overwrite",
-            )
         suffix = "" if step == 0 else f"_s{step}"
         out_path = os.path.join(output_dir, f"{entry.id}{suffix}.vtu")
         write(out_path, out_mesh)
+        row["entry_id"] = entry.id
+        row["time"] = time_value
         row["output_path"] = out_path
         rows.append(row)
     return rows

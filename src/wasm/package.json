@@ -1,6 +1,6 @@
 {
   "name": "@meshioplusplus/wasm",
-  "version": "10.31.0",
+  "version": "10.32.0",
   "description": "meshio++ mesh I/O compiled to WebAssembly: read/write 41 mesh formats (incl. MED, CGNS, Exodus) in the browser or Node.js",
   "type": "module",
   "main": "./src/index.mjs",
