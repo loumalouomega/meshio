@@ -172,3 +172,88 @@ def test_cellblock_polygon_dim():
         [("polygon", [[0, 1, 2, 3]])],
     )
     assert mesh.cells[0].dim == 2
+
+
+# --------------------------------------------------------------------------- #
+# Rank-0 (scalar) field_data. A 0-d value used to be destroyed by every C++
+# operation that clones a mesh: `NDArray::Size()` reported 0 for an empty
+# shape, so `Nbytes()` was 0, `MakeOwned` copied nothing, and pybind11 -- given
+# the resulting null pointer -- had numpy allocate a fresh uninitialized scalar
+# instead of adopting the capsule.
+#
+# **The value alone is a weak oracle.** The freed buffer is very often reused,
+# so a 0-d value of 1.0 frequently reads back as exactly 1.0 and the test
+# passes while the bug is live. These use a value that appears nowhere else in
+# the mesh AND assert the array is capsule-backed, which is what actually
+# separates "copied" from "freshly allocated".
+# --------------------------------------------------------------------------- #
+SCALAR = 12345.678
+
+
+def _scalar_mesh():
+    mesh = meshioplusplus.grid([1, 1, 1])
+    mesh.field_data["scalar"] = np.array(SCALAR)  # 0-d
+    mesh.field_data["control"] = np.array([SCALAR])  # 1-d, always worked
+    return mesh
+
+
+def _assert_scalar_survived(mesh):
+    value = mesh.field_data["scalar"]
+    assert value.shape == ()
+    assert float(value) == SCALAR
+    # Capsule-backed, exactly like the 1-d control: a freshly allocated numpy
+    # scalar has `base is None`, which is what the bug produced.
+    assert value.base is not None
+    assert mesh.field_data["control"].shape == (1,)
+    assert float(mesh.field_data["control"][0]) == SCALAR
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(
+            lambda m: meshioplusplus.convert_cells(m, mode="linearize"),
+            id="convert_cells",
+        ),
+        pytest.param(lambda m: meshioplusplus.clean(m), id="clean"),
+        pytest.param(lambda m: meshioplusplus.transform(m, scale=2.0), id="transform"),
+        pytest.param(lambda m: meshioplusplus.attach_quality(m), id="attach_quality"),
+        pytest.param(lambda m: meshioplusplus.refine(m), id="refine"),
+        pytest.param(lambda m: meshioplusplus.smooth(m, iterations=1), id="smooth"),
+        pytest.param(
+            lambda m: meshioplusplus.crop(m, bbox=([-9, -9, -9], [9, 9, 9])), id="crop"
+        ),
+        pytest.param(
+            lambda m: meshioplusplus.data_drop(m, "point", []), id="data_drop"
+        ),
+        pytest.param(
+            lambda m: meshioplusplus.point_data_to_cell_data(m), id="point_to_cell"
+        ),
+    ],
+)
+def test_a_scalar_field_data_value_survives_an_operation(operation):
+    _assert_scalar_survived(operation(_scalar_mesh()))
+
+
+def test_the_engines_agree_on_a_scalar():
+    # The numpy fallback always preserved a 0-d value, so it is the oracle the
+    # compiled path has to match -- the repo's standing twin contract, which
+    # this bug quietly violated.
+    from meshioplusplus._convert_cells import _convert_cells_py
+
+    native = meshioplusplus.convert_cells(_scalar_mesh(), mode="linearize")
+    fallback = _convert_cells_py(_scalar_mesh(), "linearize", False)[0]
+
+    for name in ("scalar", "control"):
+        assert native.field_data[name].shape == fallback.field_data[name].shape
+        assert np.array_equal(native.field_data[name], fallback.field_data[name])
+
+
+def test_a_scalar_survives_a_write_read_round_trip(tmp_path):
+    # pmsh and zarr both keep global_data 0-d on disk, so this is a real input
+    # rather than a hand-made one -- and the write path tessellates first.
+    path = tmp_path / "case.pmsh"
+    meshioplusplus.write(path, _scalar_mesh(), float32=False)
+    value = meshioplusplus.read(path).field_data["scalar"]
+    assert value.shape == ()
+    assert float(value) == SCALAR

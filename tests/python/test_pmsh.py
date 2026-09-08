@@ -85,19 +85,19 @@ def test_a_zero_element_array_has_no_blob(tmp_path):
     assert back.points.shape == cloud.points.shape
 
 
-def test_a_scalar_global_survives(tmp_path):
+@pytest.mark.parametrize("mesh", [helpers.tet_mesh, helpers.tri_quad_mesh])
+def test_a_scalar_global_survives(tmp_path, mesh):
     # A 0-d field_data entry stays 0-d, rather than becoming a length-1 array.
-    # Note the fixture is deliberately already-simplicial: a mesh that needs
-    # tessellating loses a 0-d field_data value on the way in, which is a
-    # PRE-EXISTING core limitation (NDArray::Size() reports 0 for an empty
-    # shape, so a clone allocates no bytes for it) and not this format's doing.
+    # Both fixtures matter: `tri_quad_mesh` needs tessellating on the way in,
+    # which used to destroy the value (NDArray::Size() reported 0 for an empty
+    # shape, so the clone copied no bytes) -- fixed in v10.35.0, ABI 11 -> 12.
     path = tmp_path / "a.pmsh"
-    mesh = helpers.tet_mesh.copy()
-    mesh.field_data["Re"] = np.array(100.0)
+    mesh = mesh.copy()
+    mesh.field_data["Re"] = np.array(12345.678)
     _write(path, mesh)
     back = pmsh.read(path)
     assert back.field_data["Re"].shape == ()
-    assert float(back.field_data["Re"]) == 100.0
+    assert float(back.field_data["Re"]) == 12345.678
 
 
 def test_a_truncated_store_fails_rather_than_reading_zeros(tmp_path):

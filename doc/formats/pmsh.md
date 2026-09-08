@@ -61,4 +61,3 @@ Arrays come back memory-mapped copy-on-write, so they are writeable (meshio++'s 
 * The reduction to one simplex kind is lossy by construction, and a round trip therefore does not reproduce a mixed-topology mesh.
 * There is no provenance slot: a `.pmsh` carries no free-text field, and adding a sidecar file would put something upstream's own loader never wrote into its layout. `read_metadata` honestly reports none.
 * A `physicsnemo` `DomainMesh` (`.pdmsh`, an interior mesh plus named boundaries) is refused by name rather than half-read.
-* A 0-d `field_data` entry survives a direct write, but not a mesh that needed tessellating first — a pre-existing core limitation (`NDArray::Size()` reports zero elements for an empty shape), not specific to this format.

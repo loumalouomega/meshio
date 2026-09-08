@@ -109,6 +109,34 @@ TEST(NDArrayAllocator, OwningAllocationsRouteThroughTheHook) {
     EXPECT_EQ(c.bytes_alloc, c.bytes_free);
 }
 
+TEST(NDArrayAllocator, AScalarAllocatesOneElementAndAnAbsentArrayNone) {
+    // The allocation is what separates a rank-0 scalar from a default-
+    // constructed array: they share an empty shape and nothing else tells them
+    // apart, so `Size()` reads the buffer. Counted here rather than inferred.
+    Counters c;
+    {
+        ScopedCountingAllocator guard(c);
+        NDArray scalar(DType::Float64, {});
+        EXPECT_EQ(c.allocs, 1u);
+        EXPECT_EQ(c.bytes_alloc, 8u);
+        EXPECT_EQ(scalar.Size(), 1u);
+
+        NDArray absent;  // allocates nothing, and says so
+        EXPECT_EQ(c.allocs, 1u);
+        EXPECT_EQ(absent.Size(), 0u);
+
+        double ext = 12345.678;
+        NDArray view = NDArray::MakeView(DType::Float64, {}, reinterpret_cast<std::byte*>(&ext));
+        EXPECT_EQ(c.allocs, 1u);  // views allocate nothing
+        view.MakeOwned();         // ... until they are made owning
+        EXPECT_EQ(c.allocs, 2u);
+        EXPECT_EQ(c.bytes_alloc, 16u);
+        EXPECT_EQ(view.As<double>()[0], 12345.678);
+    }
+    EXPECT_EQ(c.allocs, c.frees);
+    EXPECT_EQ(c.bytes_alloc, c.bytes_free);
+}
+
 TEST(NDArrayAllocator, FreeAfterUninstallStillRoutesToTheRecordedAllocator) {
     Counters c;
     NDArray survivor;

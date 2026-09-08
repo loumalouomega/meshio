@@ -71,6 +71,73 @@ TEST(NDArray, ViewBecomesOwnedCopy) {
     EXPECT_EQ(v.As<std::int64_t>()[2], 3);
 }
 
+// --------------------------------------------------------------------------- //
+// Rank-0 (scalar) arrays. An empty shape means two things -- a scalar, and a
+// default-constructed "absent" array -- and `Size()` separates them by whether
+// a buffer exists. Both halves are load-bearing: `PropertyValue::IsText` and
+// KratosMesh's `ConcatKind` sentinel read `Size() == 0` to mean absent, while
+// every byte-copy path needs a scalar to count as one element or a 0-d value
+// crossing from numpy is dropped on the first clone.
+// --------------------------------------------------------------------------- //
+TEST(NDArray, ScalarHoldsOneElement) {
+    NDArray a(DType::Float64, {});
+    EXPECT_EQ(a.Ndim(), 0u);
+    EXPECT_EQ(a.Size(), 1u);
+    EXPECT_EQ(a.Nbytes(), 8u);
+    ASSERT_NE(a.Data(), nullptr);
+    EXPECT_EQ(a.As<double>()[0], 0.0);  // the ctor still zero-fills
+    a.As<double>()[0] = 12345.678;
+    EXPECT_EQ(a.As<double>()[0], 12345.678);
+}
+
+TEST(NDArray, DefaultConstructedHoldsNothing) {
+    // The "absent" state, and the reason Size() cannot simply return the empty
+    // product: two callers read this as a sentinel.
+    NDArray a;
+    EXPECT_EQ(a.Ndim(), 0u);
+    EXPECT_EQ(a.Size(), 0u);
+    EXPECT_EQ(a.Nbytes(), 0u);
+    EXPECT_EQ(a.Data(), nullptr);
+}
+
+TEST(NDArray, ScalarViewSurvivesMakeOwned) {
+    // The exact path a 0-d numpy value takes into a cloned mesh: view in,
+    // MakeOwned, value out. It used to copy zero bytes and leave a null
+    // pointer behind, which pybind11 then turned into a fresh uninitialized
+    // numpy scalar.
+    double buf = 12345.678;
+    NDArray v = NDArray::MakeView(DType::Float64, {}, reinterpret_cast<std::byte*>(&buf));
+    EXPECT_TRUE(v.IsView());
+    EXPECT_EQ(v.Size(), 1u);
+    v.MakeOwned();
+    EXPECT_FALSE(v.IsView());
+    ASSERT_NE(v.Data(), nullptr);
+    buf = -1.0;  // mutating the original no longer affects the owned copy
+    EXPECT_EQ(v.As<double>()[0], 12345.678);
+}
+
+TEST(NDArray, ScalarReshapesToAndFromLengthOne) {
+    NDArray a(DType::Int64, {1});
+    a.As<std::int64_t>()[0] = 7;
+    a.Reshape({});  // one element either way
+    EXPECT_EQ(a.Ndim(), 0u);
+    EXPECT_EQ(a.As<std::int64_t>()[0], 7);
+    a.Reshape({1});
+    EXPECT_EQ(a.Ndim(), 1u);
+    EXPECT_EQ(a.As<std::int64_t>()[0], 7);
+    a.Reshape({2});  // inconsistent, ignored
+    EXPECT_EQ(a.Ndim(), 1u);
+    EXPECT_EQ(a.Shape()[0], 1u);
+}
+
+TEST(NDArray, ScalarCopiesItsValue) {
+    NDArray a(DType::Float64, {});
+    a.As<double>()[0] = 12345.678;
+    NDArray b = a;  // implicit copy ctor -> OwnedBuf deep copy
+    a.As<double>()[0] = -1.0;
+    EXPECT_EQ(b.As<double>()[0], 12345.678);
+}
+
 TEST(Mesh, CountsAndCellBlock) {
     Mesh m;
     m.AssignPoints(NDArray(DType::Float64, {5, 3}));

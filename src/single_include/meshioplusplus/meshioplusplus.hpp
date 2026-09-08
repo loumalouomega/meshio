@@ -78,6 +78,8 @@
  *  | 8   | v10.11.0           | `RemeshOptions` gained `mGradation`/`mPreserveBoundary`, `RemeshResult` gained `mNumNonManifoldVertices` |
  *  | 9   | v10.12.0           | `RemeshOptions` gained `mMaxAnisotropy`; `RemeshMetric` gained `Anisotropic` |
  *  | 10  | v10.13.0           | `SmoothMethod` gained an explicit `: std::uint8_t` underlying type (previously the scoped-enum default `int`) plus `Odt`; `RemeshVolumeOptions`/`RemeshVolumeResult` are new (Tier C, riding along) |
+ *  | 11  | v10.17.0 .. v10.34.0 | `MeshMetadata` gained `mProvenance`/`mProvenanceRecognised` (256 -> 288 bytes) for provenance read-back |
+ *  | 12  | v10.35.0           | **Tier B, not a layout change**: `NDArray::Size()`'s inline body. It reported 0 for a rank-0 array, so `Nbytes()` was 0 and every clone dropped a 0-d scalar's single element -- now it counts what the buffer holds. `sizeof(NDArray)` is unchanged at 72 |
  *
  * ### This is the ONE place the number is written
  *
@@ -96,7 +98,7 @@
  * supported opt-out.
  */
 
-#define MESHIOPLUSPLUS_ABI_VERSION 11
+#define MESHIOPLUSPLUS_ABI_VERSION 12
 // ===== end src/cpp/include/meshioplusplus/abi_version.hpp =====
 // ===== begin src/cpp/include/meshioplusplus/cell_type.hpp =====
 /**
@@ -760,7 +762,11 @@ public:
      * @param shape Row-major dimensions; total element count is their product.
      */
     NDArray(DType dt, std::vector<std::size_t> shape) : mDtype(dt), mShape(std::move(shape)) {
-        const std::size_t nb = Nbytes();
+        // ShapeCount, not Nbytes(): no buffer exists yet, and `Size()` reports
+        // 0 for a rank-0 array until one does (see its doc comment). Asking it
+        // here would allocate nothing for a scalar and then hand out a null
+        // pointer for its single element.
+        const std::size_t nb = ShapeCount(mShape) * dtype_size(mDtype);
         mOwned.resize(nb);                  // uninitialised (OwnedBuf)
         std::memset(mOwned.data(), 0, nb);  // explicit zero-fill
     }
@@ -786,7 +792,7 @@ public:
         NDArray a;
         a.mDtype = dt;
         a.mShape = std::move(shape);
-        a.mOwned.resize(a.Nbytes());  // no memset
+        a.mOwned.resize(ShapeCount(a.mShape) * dtype_size(a.mDtype));  // no memset
         return a;
     }
 
@@ -817,12 +823,32 @@ public:
     /** @brief Whether this array is a non-owning view (vs. owning its buffer). */
     bool IsView() const { return mView != nullptr; }
 
-    /** @brief Total element count (product of `Shape()`), or 0 if `Shape()` is empty. */
+    /**
+     * @brief The number of elements the buffer holds: the product of `Shape()`.
+     *
+     * An empty shape is the one case needing a word, because it means two
+     * different things. A **rank-0 array is a scalar** and holds exactly one
+     * element -- the empty product, and numpy's own `np.array(1.0).size`. A
+     * **default-constructed** `NDArray` also has an empty shape and holds
+     * nothing at all. Nothing else separates them: `mDtype` defaults to a
+     * valid `Float64` and `DType` has no null enumerator.
+     *
+     * The buffer is what tells them apart, and stating the rule that way makes
+     * it general rather than a special case: *`Size()` counts what the buffer
+     * actually holds*, which is equally true of every non-empty shape (a
+     * `{0, 3}` array allocates nothing and counts nothing).
+     *
+     * Callers depend on both halves. `PropertyValue::IsText`
+     * (`properties.hpp`) and `KratosMesh`'s `ConcatKind` sentinel read
+     * `Size() == 0` to mean "absent"; every byte-copy path -- `MakeOwned`,
+     * `Nbytes`, `data_owned_copy` and the per-operation copies built on it --
+     * needs a scalar to count as one element, or a 0-d value crossing from
+     * numpy is silently dropped on the first clone.
+     */
     std::size_t Size() const {
         if (mShape.empty())
-            return 0;
-        return std::accumulate(mShape.begin(), mShape.end(), std::size_t{1},
-                               std::multiplies<std::size_t>());
+            return Data() == nullptr ? 0 : 1;
+        return ShapeCount(mShape);
     }
     /** @brief Total buffer size in bytes: `Size() * dtype_size(Dtype())`. */
     std::size_t Nbytes() const { return Size() * dtype_size(mDtype); }
@@ -840,11 +866,9 @@ public:
      * @param new_shape The desired row-major dimensions.
      */
     void Reshape(std::vector<std::size_t> new_shape) {
-        std::size_t n = new_shape.empty()
-                            ? 0
-                            : std::accumulate(new_shape.begin(), new_shape.end(), std::size_t{1},
-                                              std::multiplies<std::size_t>());
-        if (n != Size())
+        // ShapeCount, so a one-element array moves freely between `{1}` and
+        // `{}` (a scalar); an array holding nothing still refuses both.
+        if (ShapeCount(new_shape) != Size())
             return;  // ignore inconsistent reshape
         mShape = std::move(new_shape);
     }
@@ -883,6 +907,20 @@ public:
     }
 
 private:
+    /**
+     * @brief The element count a shape implies: the product of its extents.
+     *
+     * One for an EMPTY shape, by construction -- `std::accumulate`'s init
+     * value over an empty range -- which is the right answer for a rank-0
+     * scalar. `Size()` is what decides whether an empty shape is a scalar at
+     * all; this only does the arithmetic, so the constructors can size a
+     * buffer before one exists.
+     */
+    static std::size_t ShapeCount(const std::vector<std::size_t>& rShape) {
+        return std::accumulate(rShape.begin(), rShape.end(), std::size_t{1},
+                               std::multiplies<std::size_t>());
+    }
+
     DType mDtype = DType::Float64;
     std::vector<std::size_t> mShape;
     detail::OwnedBuf mOwned;
