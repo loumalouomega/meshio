@@ -157,6 +157,30 @@ TriangleSoup build_triangle_soup(const Mesh& rSurface, const std::string& rRegio
     return soup;
 }
 
+SurfaceEdgeMap build_surface_edges(const TriangleSoup& rSoup) {
+    // Per undirected edge: how many triangles use it, and how many use it in the
+    // low->high direction. A consistently wound closed surface has every edge
+    // used exactly twice, once in each direction.
+    const std::size_t ntri = rSoup.NumTriangles();
+    SurfaceEdgeMap edges;
+    edges.reserve(ntri * 3 * 2);
+    for (std::size_t t = 0; t < ntri; ++t) {
+        const std::array<std::int64_t, 3>& v = rSoup.mVertices[t];
+        for (std::size_t e = 0; e < 3; ++e) {
+            const std::int64_t u = v[e];
+            const std::int64_t w = v[(e + 1) % 3];
+            const SurfaceEdgeKey key{u < w ? u : w, u < w ? w : u};
+            SurfaceEdgeRecord& rec = edges[key];
+            ++rec.mUsed;
+            if (u < w)
+                ++rec.mForward;
+            if (rec.mFirstTriangle < 0)
+                rec.mFirstTriangle = static_cast<std::int64_t>(t);
+        }
+    }
+    return edges;
+}
+
 SurfaceQuality soup_quality(const TriangleSoup& rSoup) {
     SurfaceQuality q;
     const std::size_t ntri = rSoup.NumTriangles();
@@ -169,26 +193,10 @@ SurfaceQuality soup_quality(const TriangleSoup& rSoup) {
             ++q.mDegenerateTriangles;
     }
 
-    // Per undirected edge: how many triangles use it, and how many use it in the
-    // low->high direction. A consistently wound closed surface has every edge
-    // used exactly twice, once in each direction.
-    std::unordered_map<SurfaceEdgeKey, std::array<std::int64_t, 2>, SurfaceEdgeKeyHash> edges;
-    edges.reserve(ntri * 3 * 2);
-    for (std::size_t t = 0; t < ntri; ++t) {
-        const std::array<std::int64_t, 3>& v = rSoup.mVertices[t];
-        for (std::size_t e = 0; e < 3; ++e) {
-            const std::int64_t u = v[e];
-            const std::int64_t w = v[(e + 1) % 3];
-            const SurfaceEdgeKey key{u < w ? u : w, u < w ? w : u};
-            std::array<std::int64_t, 2>& rec = edges[key];
-            ++rec[0];
-            if (u < w)
-                ++rec[1];
-        }
-    }
+    const SurfaceEdgeMap edges = build_surface_edges(rSoup);
     for (const auto& kv : edges) {
-        const std::int64_t used = kv.second[0];
-        const std::int64_t forward = kv.second[1];
+        const std::int64_t used = kv.second.mUsed;
+        const std::int64_t forward = kv.second.mForward;
         if (used == 1)
             ++q.mBoundaryEdges;
         else if (used > 2)

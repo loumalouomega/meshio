@@ -94,9 +94,14 @@ struct TriangleSoup {
     std::vector<Vec3> mCorners;
     /// Per triangle, the global (block-major) index of the input cell it came from.
     std::vector<std::int64_t> mSourceCell;
-    /// Per triangle, the three vertex ids in the *welded* numbering below.
+    /// Per triangle, the three vertex ids -- the INPUT MESH's own point ids.
+    /// `build_triangle_soup` does not weld: it copies every mesh point verbatim,
+    /// so `mPoints[i]` is mesh point `i`, index for index, orphans included.
+    /// Two coincident-but-distinct points therefore read as two vertices here,
+    /// which is why an edge between them counts as a boundary edge and why
+    /// `repair` merges points before it looks at orientation or holes.
     std::vector<std::array<std::int64_t, 3>> mVertices;
-    /// Distinct vertex positions, indexed by the ids in `mVertices`.
+    /// Every input point, in the input's own order (see `mVertices`).
     std::vector<Vec3> mPoints;
 
     std::size_t NumTriangles() const { return mSourceCell.size(); }
@@ -115,9 +120,6 @@ struct TriangleSoup {
 MESHIOPLUSPLUS_API TriangleSoup build_triangle_soup(const Mesh& rSurface,
                                                     const std::string& rRegion);
 
-/// The four edge defect counts of a soup, and the resulting verdict.
-MESHIOPLUSPLUS_API SurfaceQuality soup_quality(const TriangleSoup& rSoup);
-
 /// An undirected edge, as the sorted pair of its endpoints' vertex ids.
 using SurfaceEdgeKey = std::array<std::int64_t, 2>;
 
@@ -130,6 +132,42 @@ struct SurfaceEdgeKeyHash {
         return h;
     }
 };
+
+/**
+ * @brief What one undirected edge of a soup is used by.
+ *
+ * `mUsed` is how many triangles reference the edge and `mForward` how many
+ * traverse it low->high. A consistently wound closed surface has `mUsed == 2`
+ * and `mForward == 1` on every edge: the two triangles walk their shared edge
+ * in opposite directions, which is exactly what "they agree about which side
+ * is out" means. `mUsed == 1` is a boundary edge, `mUsed > 2` non-manifold,
+ * and `mUsed == 2 && mForward != 1` a wound-the-same-way pair.
+ *
+ * `mFirstTriangle` is the lowest-indexed triangle using the edge, which is
+ * what lets a caller walk the face dual without building a second incidence
+ * structure.
+ */
+struct SurfaceEdgeRecord {
+    std::int64_t mUsed = 0;
+    std::int64_t mForward = 0;
+    std::int64_t mFirstTriangle = -1;
+};
+
+/// Every undirected edge of a soup, keyed by its sorted endpoint pair.
+using SurfaceEdgeMap = std::unordered_map<SurfaceEdgeKey, SurfaceEdgeRecord, SurfaceEdgeKeyHash>;
+
+/**
+ * @brief The per-edge use record of a soup.
+ *
+ * `soup_quality` is a fold over this, and it is what a reorientation BFS walks
+ * and what a boundary-loop walk starts from -- so the three cannot disagree
+ * about what a boundary edge is. Hoisted out of `soup_quality`'s body, which
+ * built exactly this map and then discarded it.
+ */
+MESHIOPLUSPLUS_API SurfaceEdgeMap build_surface_edges(const TriangleSoup& rSoup);
+
+/// The four edge defect counts of a soup, and the resulting verdict.
+MESHIOPLUSPLUS_API SurfaceQuality soup_quality(const TriangleSoup& rSoup);
 
 /**
  * @brief A soup prepared for querying: the accelerator plus the normal tables.
