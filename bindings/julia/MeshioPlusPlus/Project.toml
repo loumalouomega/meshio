@@ -1,7 +1,7 @@
 name = "MeshioPlusPlus"
 uuid = "e7ab4aca-eb60-4871-ac29-9ed1ef292e46"
 authors = ["Vicente Mataix Ferrándiz <tote1989@gmail.com>"]
-version = "10.35.0"
+version = "10.36.0"
 
 [deps]
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"

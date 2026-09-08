@@ -42,9 +42,17 @@
  * have a flipped variant; `triangle`/`quad` do not need one). This
  * determinant check only happens on write — the read-side reorder is a
  * fixed, unconditional permutation, assuming a well-formed file already
- * stores correctly-handed zones. `ZGROUP`/`FGROUP` cell-group sections are
- * always deferred to the Python fallback (see @ref read_flac3d). See
- * doc/formats/flac3d.md for the full node-order tables.
+ * stores correctly-handed zones.
+ *
+ * `ZGROUP`/`FGROUP` cell-group sections are read and written as named
+ * `RegionKind::Cell` regions. A FLAC3D group is identified by all three of
+ * (`ZGROUP` vs `FGROUP`, name, slot) -- zones and faces are separate
+ * namespaces and a slot partitions the groups within one -- so a region is
+ * named `<zone|face>:<name>:<slot>` and the writer decomposes that back, which
+ * is what makes a file read from disk a fixed point. **Zone and face cell ids
+ * are separate 1-based namespaces** (a real file numbers its zones 1..nz and
+ * its faces 1..nf independently), so each section is written with its own
+ * counter. See doc/formats/flac3d.md for the full node-order tables.
  */
 
 // System includes
@@ -71,10 +79,13 @@ namespace meshioplusplus {
  *        binary)
  * @param binary write the binary FLAC3D layout (`true`) or ASCII (`false`)
  * @throws WriteError if a file cannot be opened for writing
- * @note the shim only attempts this C++ path when `mesh.cell_sets` is
- *       empty — `ZGROUP`/`FGROUP` are always written by the Python fallback,
- *       which also hardcodes group slots (`SLOT 1` ASCII / `"Default"`
- *       binary) rather than preserving an original slot name
+ * @note every `RegionKind::Cell` region is emitted as a `ZGROUP` and/or an
+ *       `FGROUP`, its name decomposed by the `<zone|face>:<name>:<slot>` rule
+ *       above (a name in any other shape keeps its whole self and takes the
+ *       `Default` slot, so it can land in both sections at once when its
+ *       members span them). `Point` and `Side` regions have no FLAC3D
+ *       equivalent and are ignored. Output is byte-identical to the Python
+ *       reference writer's in both encodings.
  */
 MESHIOPLUSPLUS_API void write_flac3d(const std::string& rPath, const Mesh& rMesh, const std::string& rFloatFmt,
                   bool binary);
@@ -96,12 +107,13 @@ MESHIOPLUSPLUS_API void write_flac3d(const std::string& rPath, const Mesh& rMesh
  *         zones)
  * @throws ReadError if the file can't be opened, the file ends
  *         unexpectedly, a cell's node count doesn't match any known FLAC3D
- *         type, or the file contains a `ZGROUP`/`FGROUP` section (ASCII) or
- *         binary group section — always deferring the whole file to the
- *         Python fallback, since `cell_sets` (built from those groups) is
- *         not carried by the Mesh conversion layer
+ *         type, or a `ZGROUP`/`FGROUP` header is malformed
  * @note point_data/field_data are never produced; `cell_data["cell_ids"]` is
- *       the only key this reader sets
+ *       the only key this reader sets. Each `ZGROUP`/`FGROUP` becomes one
+ *       `RegionKind::Cell` region named `<zone|face>:<name>:<slot>`, with
+ *       `mDim`/`mTag` left at -1; a group member the file never defined is
+ *       dropped with a warning rather than guessed at, and an empty group is
+ *       still carried, since the name is information.
  */
 MESHIOPLUSPLUS_API Mesh read_flac3d(const std::string& rPath);
 

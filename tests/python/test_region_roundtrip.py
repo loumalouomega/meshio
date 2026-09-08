@@ -9,7 +9,10 @@ a format that silently starts or stops carrying a kind fails here.
 Phase 1 maps Gmsh, Abaqus and MED. Exodus reads regions (element blocks, node
 sets and side sets) but does not yet write them, so it is a **read-only** entry
 recorded below rather than a row here -- this matrix is a round-trip table, and
-a format that cannot write cannot round-trip. UNV, Ansys, OpenFOAM and XDMF
+a format that cannot write cannot round-trip. FLAC3D round-trips a cell
+region's *membership* but rewrites its *name* into the file's own
+``<zone|face>:<name>:<slot>`` vocabulary, so it gets its own bucket too rather
+than weakening this table's exact-name assertion. UNV, Ansys, OpenFOAM and XDMF
 are deferred entirely. See ``doc/regions.md``.
 """
 
@@ -212,6 +215,58 @@ READ_ONLY_REGIONS = {
         "eb_names nor side sets, so a region written here would not come back"
     ),
 }
+
+
+# --------------------------------------------------------------------------- #
+# Round-trips membership but RENAMES: the format's own namespace is part of a  #
+# group's identity, so a region's name is rewritten into it on write and is a  #
+# fixed point only thereafter. Not a MATRIX row -- that table asserts the name #
+# survives *exactly*, which is the right assertion for every format that can   #
+# make it, and weakening it for one exception would cost the other three.      #
+# --------------------------------------------------------------------------- #
+NAMESPACED_REGIONS = {
+    "flac3d": (
+        ".f3grid",
+        "zone:solid:Default",
+        "A FLAC3D group is identified by all three of (ZGROUP vs FGROUP, name, "
+        "slot) -- zones and faces are separate namespaces and a slot partitions "
+        "the groups within one -- so meshio++ names it "
+        "`<zone|face>:<name>:<slot>`. A region named `solid` on a zone mesh "
+        "comes back as `zone:solid:Default`; a name already in that form "
+        "round-trips unchanged. FLAC3D has no node-set and no facet-group "
+        "concept, so point and side regions are dropped.",
+    ),
+}
+
+
+@pytest.mark.parametrize("fmt", sorted(NAMESPACED_REGIONS))
+def test_namespaced_region_formats_keep_membership(fmt, tmp_path):
+    """Membership survives exactly; the name is rewritten, then stable."""
+    suffix, renamed, why = NAMESPACED_REGIONS[fmt]
+    mesh = fixture_mesh()
+    path = tmp_path / ("regions" + suffix)
+    meshioplusplus.write(path, mesh, file_format=fmt)
+    back = meshioplusplus.read(path)
+
+    cells = {r.name: r for r in back.regions if r.kind == "cell"}
+    assert list(cells) == [renamed], why
+    assert_array_equal(cells[renamed].entries, [0, 1], err_msg=why)
+    assert [r for r in back.regions if r.kind in ("point", "side")] == [], why
+
+    # ... and the rewritten name is a fixed point from there on.
+    again = tmp_path / ("again" + suffix)
+    meshioplusplus.write(again, back, file_format=fmt)
+    assert [r.name for r in meshioplusplus.read(again).regions] == [renamed], why
+
+
+@pytest.mark.parametrize("fmt", sorted(NAMESPACED_REGIONS))
+def test_namespaced_region_formats_are_not_round_trip_rows(fmt):
+    """Pins which bucket this format belongs to, as the others do."""
+    assert fmt not in {
+        p.values[0] for p in MATRIX
+    }, f"{fmt} now preserves region names: move it into MATRIX"
+    assert fmt not in PHASE_2, f"{fmt} carries regions: it is no longer a Phase-2 gap"
+    assert fmt not in READ_ONLY_REGIONS, f"{fmt} writes regions too"
 
 
 @pytest.mark.parametrize("fmt", sorted(READ_ONLY_REGIONS))

@@ -17,9 +17,10 @@ def read(filename):
 
 def write(filename, mesh, float_fmt: str = ".16e", binary: bool = False):
     """Write a FLAC3D .f3grid file (C++ core for the common path, Python fallback)."""
-    # The C++ writer covers points + zone/face cells; cell groups (cell_sets)
-    # are left to the reference Python writer.
-    if not mesh.cell_sets and not is_buffer(filename, "w"):
+    # The C++ writer covers points, zone/face cells and ZGROUP/FGROUP cell
+    # groups, and its output is byte-identical to the reference writer's, so
+    # nothing but a buffer target is gated out.
+    if not is_buffer(filename, "w"):
         try:
             _core.flac3d_write(str(filename), mesh, float_fmt, binary)
             return

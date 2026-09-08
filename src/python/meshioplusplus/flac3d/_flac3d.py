@@ -15,6 +15,11 @@ from .._exceptions import ReadError
 from .._files import open_file
 from .._mesh import Mesh
 
+# The slot a group is written into when its name does not name one. Every
+# real FLAC3D file uses "Default"; the reference writer used to emit
+# `SLOT 1`, which no reader here or elsewhere treats as special.
+DEFAULT_SLOT = "Default"
+
 meshio_only = {
     "zone": {
         "tetra": "tetra",
@@ -85,12 +90,6 @@ meshio_to_flac3d_order_2 = {
 }
 
 
-flag_to_numdim = {
-    "zone": 3,
-    "face": 2,
-}
-
-
 def _merge(a: dict, b: dict) -> dict:
     return {**a, **b}
 
@@ -107,6 +106,31 @@ def read(filename):
     with open_file(filename, mode) as f:
         out = read_buffer(f, binary)
 
+    return out
+
+
+def _resolve_group_ids(sets, cell_ids, offset):
+    """FLAC3D group member ids -> global block-major cell indices.
+
+    ``cell_ids`` are the file's own ids for one category (zones or faces), in
+    the order the cells were read; ``offset`` is where that category starts in
+    the concatenated ``f_cells + z_cells`` cell list. An id the file never
+    defined resolves to ``-1`` and stays ``-1`` -- adding the offset to it
+    would land it on a real cell of the other category.
+    """
+    cell_ids = np.asarray(cell_ids, dtype=np.int64).reshape(-1)
+    inv = np.full(int(cell_ids.max()) + 1 if len(cell_ids) else 0, -1, dtype=np.int64)
+    if len(cell_ids):
+        inv[cell_ids] = np.arange(len(cell_ids), dtype=np.int64)
+
+    out = {}
+    for key, value in sets.items():
+        value = np.asarray(value, dtype=np.int64).reshape(-1)
+        idx = np.full(len(value), -1, dtype=np.int64)
+        known = (value >= 0) & (value < len(inv))
+        idx[known] = inv[value[known]]
+        idx[idx >= 0] += offset
+        out[key] = idx
     return out
 
 
@@ -218,25 +242,27 @@ def read_buffer(f, binary):
 
     # FLAC3D contains global cell ids. Create an inverse array that maps the
     # global IDs to the running index (0, 1,..., n) that's used in meshio.
-    if len(f_cell_ids) > 0:
-        f_inv = np.full(np.max(f_cell_ids) + 1, -1)
-        f_inv[f_cell_ids] = np.arange(len(f_cell_ids))
-        f_cell_sets = {key: f_inv[value] for key, value in f_cell_sets.items()}
-    if len(z_cell_ids) > 0:
-        z_inv = np.full(np.max(z_cell_ids) + 1, -1)
-        z_inv[z_cell_ids] = np.arange(len(z_cell_ids))
-        z_cell_sets = {
-            key: z_inv[value] + z_offset for key, value in z_cell_sets.items()
-        }
+    f_cell_sets = _resolve_group_ids(f_cell_sets, f_cell_ids, 0)
+    z_cell_sets = _resolve_group_ids(z_cell_sets, z_cell_ids, z_offset)
 
     cell_sets = _merge(f_cell_sets, z_cell_sets)
 
-    # cell_sets contains the indices into the global cell list. Since this is
-    # split up into blocks, we need to split the cell_sets, too.
-    bins = np.cumsum([len(cb[1]) for cb in cell_blocks])
+    # `cell_sets` now holds indices into the *global* cell list, but meshio++'s
+    # `cell_sets` is a write-through view over `mesh.regions` and takes
+    # per-block **local** indices -- `_regions.blocks_to_global` adds the block
+    # base itself. So split *and rebase*: leaving the global values in place
+    # made the base be added twice and dropped every member past its own
+    # block's length, emptying whole groups (issue #76).
+    bases = np.cumsum([0] + [len(cb[1]) for cb in cell_blocks])
     for key, data in cell_sets.items():
-        d = np.digitize(data, bins)
-        cell_sets[key] = [data[d == k] for k in range(len(cell_blocks))]
+        if np.any(data < 0):
+            warn(
+                f'FLAC3D: group "{key}" names cells the file does not '
+                "define; dropping them."
+            )
+            data = data[data >= 0]
+        d = np.digitize(data, bases[1:])
+        cell_sets[key] = [data[d == k] - bases[k] for k in range(len(cell_blocks))]
 
     # assert len(cell_ids) == sum(len(block) for _, block in cell_blocks)
 
@@ -292,6 +318,13 @@ def _read_cell_binary(buf_or_line, point_ids):
     return cid, cell
 
 
+def _strip_quotes(text: str) -> str:
+    """Remove one matching pair of surrounding single or double quotes."""
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        return text[1:-1]
+    return text
+
+
 def _read_cell_group_binary(buf_or_line):
     # Group name
     (num_chars,) = struct.unpack("<H", buf_or_line.read(2))
@@ -323,7 +356,11 @@ def _read_cell_group_ascii(buf_or_line, line: str):
     assert m.group(1) in {"ZGROUP", "FGROUP"}
     assert m.group(3) == "SLOT"
     name = m.group(2)
-    slot = m.group(4)
+    # The slot is the raw remainder of the line and may or may not be quoted
+    # (`SLOT "Default"` and `SLOT 5` are both real). Strip a matching pair so
+    # the ascii and binary readers -- the latter reads a length-prefixed
+    # string, never quoted -- agree on the group key for the same mesh.
+    slot = _strip_quotes(m.group(4))
 
     i = buf_or_line.tell()
     line = buf_or_line.readline()
@@ -350,79 +387,82 @@ def _update_cells(cells, cell, flag):
         cells.append((cell_type, [cell]))
 
 
+def _split_group_key(key):
+    """``{zone|face}:{name}:{slot}`` -> ``(flag, name, slot)``.
+
+    The reader builds that composite key because a FLAC3D group is identified
+    by all three: ZGROUP and FGROUP are separate namespaces and a slot
+    partitions the groups within one. Decomposing it again on write is what
+    makes a file read from disk a fixed point -- otherwise the flag and slot
+    are re-prefixed on every round trip. A name in any other shape belongs to
+    neither category in particular and is placed by its members.
+    """
+    m = re.match(r"^(zone|face):(.*):([^:]*)$", key)
+    if m is None:
+        return None, key, "Default"
+    return m.group(1), m.group(2), m.group(3)
+
+
 def split_f_z(mesh):
     # FLAC3D makes a difference between ZONES (3D-cells only) and FACES
     # (2D-cells only). Split cells into zcells and fcells, along with the cell
     # sets etc.
-    zcells = []
-    fcells = []
-    for cell_block in mesh.cells:
+    zblocks = []
+    fblocks = []
+    for i, cell_block in enumerate(mesh.cells):
         if cell_block.type in meshio_only["zone"]:
-            zcells.append(cell_block)
+            zblocks.append(i)
         elif cell_block.type in meshio_only["face"]:
-            fcells.append(cell_block)
+            fblocks.append(i)
+    zcells = [mesh.cells[i] for i in zblocks]
+    fcells = [mesh.cells[i] for i in fblocks]
+
+    def gather(blocks, cset):
+        """Per-block local indices -> 1-based ids in this category's own space.
+
+        ZONES and FACES are numbered independently in a FLAC3D file (both
+        starting at 1), so each category's running counter walks only its own
+        blocks. Zipping one category's block sizes against the whole cell list
+        is what used to misalign them.
+        """
+        out = []
+        gid = 0
+        for i in blocks:
+            idx = np.asarray(cset[i], dtype=np.int64).reshape(-1)
+            out.append(idx + (gid + 1))
+            gid += len(mesh.cells[i])
+        return np.concatenate(out) if out else np.empty(0, dtype=np.int64)
 
     zsets = {}
     fsets = {}
     for key, cset in mesh.cell_sets.items():
-        zsets[key] = []
-        fsets[key] = []
-        for cell_block, sblock in zip(mesh.cells, cset):
-            zsets[key].append(
-                sblock if cell_block.type in meshio_only["zone"] else None
-            )
-            fsets[key].append(
-                sblock if cell_block.type in meshio_only["face"] else None
-            )
-
-    # remove the data that is only None
-    zsets = {
-        key: value
-        for key, value in zsets.items()
-        if not all(item is None for item in value)
-    }
-    fsets = {
-        key: value
-        for key, value in fsets.items()
-        if not all(item is None for item in value)
-    }
-
-    # Right now, the zsets contain indices into the corresponding cell block.
-    # FLAC3D expects _global_ indices. Update.
-    cell_block_sizes = [len(cb) for cb in zcells]
-    for key, data in zsets.items():
-        gid = 0
-        for n, block in zip(cell_block_sizes, data):
-            block += gid
-            gid += n
-
-    # TODO not sure if fcells and zcells share a common global index
-    cell_block_sizes = [len(cb) for cb in fcells]
-    for key, data in fsets.items():
-        gid = 0
-        for n, block in zip(cell_block_sizes, data):
-            block += gid
-            gid += n
-
-    for label, values in zsets.items():
-        zsets[label] = np.concatenate(values)
-    for label, values in fsets.items():
-        fsets[label] = np.concatenate(values)
-
-    # flac3d indices start at 1
-    for label, values in zsets.items():
-        zsets[label] += 1
-    for label, values in fsets.items():
-        fsets[label] += 1
+        flag, _, _ = _split_group_key(key)
+        # An empty group whose name already names this category is re-emitted
+        # empty: the name is information (`detail/region_remap.hpp`'s rule),
+        # and it is what keeps a file read from disk a byte-level fixed point.
+        if flag != "face":
+            values = gather(zblocks, cset)
+            if len(values) or flag == "zone":
+                zsets[key] = values
+        if flag != "zone":
+            values = gather(fblocks, cset)
+            if len(values) or flag == "face":
+                fsets[key] = values
 
     return zcells, fcells, zsets, fsets
 
 
 def write(filename, mesh: Mesh, float_fmt: str = ".16e", binary: bool = False):
     """Write FLAC3D f3grid grid file."""
-    skip = [c.type for c in mesh.cells if c.type not in meshio_only["zone"]]
+    skip = [
+        c.type
+        for c in mesh.cells
+        if c.type not in meshio_only["zone"] and c.type not in meshio_only["face"]
+    ]
     if skip:
-        warn(f'FLAC3D format only supports 3D cells. Skipping {", ".join(skip)}.')
+        warn(
+            "FLAC3D only stores 3D zones and 2D faces. " f'Skipping {", ".join(skip)}.'
+        )
 
     # split into face/zone data
     zcells, fcells, zsets, fsets = split_f_z(mesh)
@@ -437,16 +477,16 @@ def write(filename, mesh: Mesh, float_fmt: str = ".16e", binary: bool = False):
 
         _write_points(f, mesh.points, binary, float_fmt)
         # Make gid an array such that its value can be persitently altered
-        # inside the functions.
-        gid = np.array(0)
-        #
-        cells = _translate_zcells(mesh.points, mesh.cells)
-        _write_cells(f, cells, "zone", binary, gid)
-        _write_groups(f, mesh.cells, zsets, "zone", binary)
+        # inside the functions. ZONES and FACES are numbered independently in
+        # a FLAC3D file -- both start at 1 -- so each section gets its own
+        # counter, matching what the reader (and every real file) expects.
+        cells = _translate_zcells(mesh.points, zcells)
+        _write_cells(f, cells, "zone", binary, np.array(0))
+        _write_groups(f, zsets, "zone", binary)
         #
         cells = _translate_fcells(fcells)
-        _write_cells(f, cells, "face", binary, gid)
-        _write_groups(f, mesh.cells, fsets, "face", binary)
+        _write_cells(f, cells, "face", binary, np.array(0))
+        _write_groups(f, fsets, "face", binary)
 
 
 def _write_points(f, points, binary, float_fmt=None):
@@ -493,35 +533,42 @@ def _write_cells(f, cells, flag: str, binary: bool, gid):
                 f.write(fmt.format(meshio_to_flac3d_type[ctype], gid, *entry))
 
 
-def _write_groups(f, cells, materials, flag, binary) -> None:
-    """Write groups."""
-    if materials is None:
-        if binary:
-            f.write(struct.pack("<I", 0))
-        return
+def _decompose_group_name(label, flag):
+    """``"zone:Brick1:Default"`` -> ``("Brick1", "Default")`` for flag ``zone``.
 
-    # TODO filter materials by zones/faces
+    The exact inverse of the reader's ``f"{flag}:{name}:{slot}"``, which is
+    what makes a file read from disk a fixed point -- without it every round
+    trip re-prefixes the flag and re-appends the slot. The split is on the
+    *last* colon because a FLAC3D group name may itself contain one while a
+    slot may not. A name in any other shape keeps its whole self and takes the
+    default slot, so a region carried in from another format (``solid``) is
+    written as ``ZGROUP "solid" SLOT "Default"``.
+    """
+    prefix = f"{flag}:"
+    rest = label[len(prefix) :] if label.startswith(prefix) else label
+    name, sep, slot = rest.rpartition(":")
+    return (name, slot) if sep else (rest, DEFAULT_SLOT)
+
+
+def _write_groups(f, materials, flag, binary) -> None:
+    """Write groups."""
+    materials = materials or {}
 
     if binary:
         f.write(struct.pack("<I", len(materials)))
         for label, group in materials.items():
-            num_chars, num_zones = len(label), len(group)
-            fmt = f"<H{num_chars}sH7sI{num_zones}I"
-            tmp = [
-                num_chars,
-                label.encode(),
-                7,
-                b"Default",  # slot
-                num_zones,
-                *group,
-            ]
-            f.write(struct.pack(fmt, *tmp))
+            name, slot = _decompose_group_name(label, flag)
+            # Encode first: the length prefixes count *bytes*, not characters.
+            nb, sb = name.encode(), slot.encode()
+            fmt = f"<H{len(nb)}sH{len(sb)}sI{len(group)}I"
+            f.write(struct.pack(fmt, len(nb), nb, len(sb), sb, len(group), *group))
     else:
         flg = "ZGROUP" if flag == "zone" else "FGROUP"
 
         f.write(f"* {flag.upper()} GROUPS\n")
         for label, group in materials.items():
-            f.write(f'{flg} "{label}" SLOT 1\n')
+            name, slot = _decompose_group_name(label, flag)
+            f.write(f'{flg} "{name}" SLOT "{slot}"\n')
             _write_table(f, group)
 
 
@@ -564,36 +611,13 @@ def _translate_fcells(cells):
     """Reorder meshio cells to FLAC3D faces."""
     faces = []
     for cell_block in cells:
-        ctype, data = cell_block
-        assert ctype in meshio_only["face"]
+        assert cell_block.type in meshio_only["face"]
 
-        key = meshio_only["face"][ctype]
+        key = meshio_only["face"][cell_block.type]
         data = cell_block.data[:, meshio_to_flac3d_order[key]]
         faces.append((key, data))
 
     return faces
-
-
-def _translate_groups(cells, cell_data, field_data, flag):
-    """Convert meshio cell_data to FLAC3D groups."""
-    dim = np.concatenate(
-        [np.full(len(c.data), 2 if c.type in meshio_only["face"] else 3) for c in cells]
-    )
-    numdim = flag_to_numdim[flag]
-    groups = {
-        k: np.nonzero(np.logical_and(cell_data == k, dim == numdim))[0] + 1
-        for k in np.unique(cell_data)
-    }
-    groups = {k: v for k, v in groups.items() if v.size}
-
-    labels = {k: str(k) for k in groups.keys()}
-    labels[0] = "None"
-    if field_data:
-        labels.update(
-            {v[0]: k for k, v in field_data.items() if v[1] == flag_to_numdim[flag]}
-        )
-
-    return dict(zip(labels.values(), groups.values()))
 
 
 def _write_table(f, data, ncol: int = 20):

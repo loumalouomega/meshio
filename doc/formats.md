@@ -304,6 +304,8 @@ meshioplusplus.flac3d.write(filename, mesh,
 )
 ```
 
+`ZGROUP`/`FGROUP` cell groups round-trip as named [regions](./regions.md) called `<zone|face>:<name>:<slot>` — see [FLAC3D](./formats/flac3d.md#data-mapping) for the naming rule and for the `cell_sets` index convention, which changed in v10.36.0.
+
 ### SU2 (`.su2`)
 
 `meshioplusplus.su2.write(filename, mesh)` — no extra options.
