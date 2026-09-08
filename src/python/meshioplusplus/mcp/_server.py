@@ -1932,6 +1932,54 @@ def _register_training(server: FastMCP) -> None:
         )
 
     @server.tool()
+    def guard_fit(
+        manifest_path: str,
+        output_path: str,
+        split: Optional[str] = "train",
+        margin: float = 1.5,
+        quality: bool = True,
+    ) -> dict:
+        """Fit a geometry guardrail over a manifest split and write it as JSON.
+
+        A trained surrogate answers any mesh it is given, and the answer for a
+        part unlike anything it saw is finite, plausible and wrong. This
+        describes the shapes in a split — extents, centroid, area, volume,
+        counts, surface area and quality summaries — so a new mesh can be
+        scored against them. The descriptors are deliberately NOT invariant:
+        a scaled part is a different part, and a model trained on brackets 10
+        cm across has learnt physics at that scale. The threshold is margin
+        times the worst training score."""
+        return _guard(
+            _tools.tool_guard_fit,
+            manifest_path=manifest_path,
+            output_path=output_path,
+            split=split,
+            margin=margin,
+            quality=quality,
+        )
+
+    @server.tool()
+    def guard_check(
+        input_path: str,
+        guard_path: Optional[str] = None,
+        input_format: Optional[str] = None,
+        top: int = 3,
+    ) -> dict:
+        """Describe one mesh's shape, and score it against a guardrail if given.
+
+        Returns the raw descriptors always; with guard_path (a fitted guard, or
+        a model card carrying one) it adds the score, the threshold, a verdict
+        of 'in' or 'out', and the top descriptors that put it there — so a flag
+        is actionable rather than a bare number. Advisory: nothing is refused."""
+        return _guard(
+            _tools.tool_guard_check,
+            input_path=input_path,
+            guard_path=guard_path,
+            input_format=input_format,
+            top=top,
+        )
+
+    @server.tool()
     def predict_file(
         checkpoint: str,
         input_path: str,

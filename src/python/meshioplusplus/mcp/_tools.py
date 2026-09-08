@@ -36,6 +36,7 @@ from collections import OrderedDict
 import numpy as np
 
 from .. import (
+    GeometryGuard,
     GridArray,
     GridSpec,
     agglomerate,
@@ -61,6 +62,7 @@ from .. import (
     estimate_error,
     extract_skin,
     extract_surface,
+    geometry_descriptors,
     gradient,
     grid,
     hessian,
@@ -2506,6 +2508,52 @@ def tool_train_predict(
     )
 
 
+def tool_guard_fit(
+    manifest_path,
+    output_path,
+    split="train",
+    margin=1.5,
+    quality=True,
+):
+    """Fit a geometry guardrail over a manifest split and write it as JSON."""
+    manifest, resolved_manifest = _load_manifest(manifest_path)
+    for entry in manifest.entries(split=split) if split else manifest:
+        _sandbox_entry_paths(entry)
+    out = _resolve(output_path, for_write=True)
+    guard = GeometryGuard.fit(
+        manifest, split=split, margin=float(margin), quality=bool(quality)
+    )
+    guard.save(out)
+    return _json_safe(
+        {
+            "manifest_path": resolved_manifest,
+            "output_path": out,
+            "num_samples": guard.schema.get("num_samples"),
+            "threshold": guard.threshold,
+            "descriptors": list(guard.names),
+        }
+    )
+
+
+def tool_guard_check(input_path, guard_path=None, input_format=None, top=3):
+    """Describe one mesh's shape, and score it against a guardrail if given.
+
+    Without guard_path this reports the raw descriptors, which is what a
+    caller comparing two parts by hand wants.
+    """
+    mesh = _load(input_path, input_format)
+    descriptors = geometry_descriptors(mesh)
+    report = {
+        "input_path": _resolve(input_path, must_exist=True),
+        "descriptors": descriptors,
+    }
+    if guard_path is not None:
+        guard = GeometryGuard.load(_resolve(guard_path, must_exist=True))
+        report.update(guard.check(descriptors, top=int(top)))
+        report["guard_path"] = _resolve(guard_path, must_exist=True)
+    return _json_safe(report)
+
+
 def tool_predict_file(
     checkpoint,
     input_path,
@@ -2867,6 +2915,18 @@ TOOL_REGISTRY = OrderedDict(
         (
             "train_mark_best",
             {"fn": tool_train_mark_best, "wraps": (), "gated": None},
+        ),
+        (
+            "guard_fit",
+            {"fn": tool_guard_fit, "wraps": ("GeometryGuard",), "gated": None},
+        ),
+        (
+            "guard_check",
+            {
+                "fn": tool_guard_check,
+                "wraps": ("geometry_descriptors",),
+                "gated": None,
+            },
         ),
         (
             "predict_file",

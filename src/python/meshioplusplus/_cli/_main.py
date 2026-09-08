@@ -20,6 +20,7 @@ from . import (
     _diff,
     _extract_surface,
     _grid_transfer,
+    _guard,
     _info,
     _interpolate,
     _isosurface,
@@ -215,6 +216,20 @@ def main(argv=None):
     )
     _predict.add_args(parser)
     parser.set_defaults(func=_predict.predict_cmd)
+
+    parser = subparsers.add_parser(
+        "guard-fit",
+        help="Fit a geometry guardrail over a dataset manifest's split",
+    )
+    _guard.add_fit_args(parser)
+    parser.set_defaults(func=_guard.guard_fit_cmd)
+
+    parser = subparsers.add_parser(
+        "guard-check",
+        help="Score a mesh against a fitted geometry guardrail",
+    )
+    _guard.add_check_args(parser)
+    parser.set_defaults(func=_guard.guard_check_cmd)
 
     parser = subparsers.add_parser(
         "sdf",

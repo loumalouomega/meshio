@@ -87,9 +87,20 @@ def _merge(total: dict, part: dict) -> None:
 
 
 def entry_health(
-    entry, *, quality: bool = True, all_steps: bool = False, read_kwargs=None
+    entry,
+    *,
+    quality: bool = True,
+    all_steps: bool = False,
+    read_kwargs=None,
+    guard=None,
 ) -> dict:
-    """One manifest entry's scan over step 0 (or every step)."""
+    """One manifest entry's scan over step 0 (or every step).
+
+    A ``guard`` (a :class:`~meshioplusplus.GeometryGuard`) additionally scores
+    the entry's shape against the distribution it was fitted on. That is
+    advisory and does NOT make an entry bad: an unusual part is a fact about
+    the dataset, not a defect in the mesh.
+    """
     try:
         plan = entry.entries()
         series = entry.time_series(**(read_kwargs or {}))
@@ -110,6 +121,11 @@ def entry_health(
             part = mesh_scan(mesh, quality=quality)
             _merge(scan, part)
             arrays.update(part["arrays"])
+            if guard is not None and index == 0:
+                try:
+                    scan["guard"] = guard.check(mesh)
+                except Exception as e:  # noqa: BLE001 -- advisory
+                    scan["guard"] = {"error": str(e)}
             del mesh
         scan["arrays"] = sorted(arrays)
         return scan
@@ -155,6 +171,7 @@ def manifest_health(
     all_steps: bool = False,
     read_kwargs=None,
     before_entry: Optional[Callable] = None,
+    guard=None,
 ) -> dict:
     """Aggregate the scans of ``entries`` (default: every entry) of a
     :class:`~meshioplusplus.DatasetManifest`. ``before_entry(entry)`` runs
@@ -173,7 +190,11 @@ def manifest_health(
                 scans[entry.id] = failed
                 continue
         scans[entry.id] = entry_health(
-            entry, quality=quality, all_steps=all_steps, read_kwargs=read_kwargs
+            entry,
+            quality=quality,
+            all_steps=all_steps,
+            read_kwargs=read_kwargs,
+            guard=guard,
         )
     totals = {
         "num_nan": 0,
@@ -198,6 +219,11 @@ def manifest_health(
         missing = sorted(union - have)
         if missing:
             fields_missing[entry_id] = missing
+    out_of_distribution = [
+        entry_id
+        for entry_id, scan in scans.items()
+        if isinstance(scan.get("guard"), dict) and scan["guard"].get("verdict") == "out"
+    ]
     splits = manifest.splits()
     return {
         "producer": "server",
@@ -210,4 +236,7 @@ def manifest_health(
         "fields_missing": fields_missing,
         "totals": totals,
         "bad_entries": bad,
+        # Advisory and separate from bad_entries: an unusual shape is a fact
+        # about the dataset, not a defect in the mesh.
+        "out_of_distribution": out_of_distribution,
     }

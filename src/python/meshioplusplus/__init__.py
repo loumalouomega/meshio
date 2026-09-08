@@ -91,6 +91,7 @@ from ._grid_transfer import (
     scatter_grid,
     squeeze_grid,
 )
+from ._guard import GeometryGuard, geometry_descriptors
 from ._helpers import (
     deregister_format,
     extension_to_filetypes,
@@ -322,6 +323,8 @@ __all__ = [
     "PointBudget",
     "select_points",
     "subsample_points",
+    "GeometryGuard",
+    "geometry_descriptors",
     "BistrideHierarchy",
     "bistride_hierarchy",
     "edge_vectors",

@@ -84,6 +84,7 @@ _TOP_KEYS = (
     "Notes",
     "Tags",
     "Augmentation",
+    "Guard",
 )
 #: Every ``Model`` key, across families. Which of them are *legal* depends on
 #: ``Model.Name`` -- see ``_MODEL_FAMILY_KEYS`` -- so that a graph
@@ -286,6 +287,7 @@ class TrainSpec:
     target_delta: bool = False
     proximity: Optional[Dict[str, Any]] = None
     augmentation: Optional[Dict[str, Any]] = None
+    guard: Optional[Dict[str, Any]] = None
     # Grid (srresnet); resolution/cell_size are the `GridSpec.from_mesh` pair
     resolution: Optional[Tuple[int, int, int]] = None
     cell_size: Optional[float] = None
@@ -435,6 +437,34 @@ def spec_from_dict(doc, *, base_dir=None) -> TrainSpec:
     else:
         augmentation = None
 
+    # A geometry guardrail is fitted on the training split at the start of a
+    # run and stored in the card. Both families can carry one -- it describes
+    # the shapes, not the sample.
+    guard = doc.get("Guard")
+    if guard is None or guard is False:
+        guard = None
+    elif guard is True:
+        guard = {}
+    elif isinstance(guard, dict):
+        known = {"Margin", "Quality"}
+        unknown = set(guard) - known
+        if unknown:
+            raise ValueError(
+                f"{_ERR}unknown key(s) {sorted(unknown)} in Guard "
+                f"(known: {', '.join(sorted(known))})"
+            )
+        margin = guard.get("Margin", 1.5)
+        if not isinstance(margin, (int, float)) or isinstance(margin, bool):
+            raise ValueError(f"{_ERR}Guard.Margin must be a positive number")
+        if margin <= 0:
+            raise ValueError(f"{_ERR}Guard.Margin must be a positive number")
+        block = {"margin": float(margin)}
+        if "Quality" in guard:
+            block["quality"] = _bool(guard["Quality"], "Guard.Quality")
+        guard = block
+    else:
+        raise ValueError(f"{_ERR}Guard must be true, false or an object")
+
     aggregation = str(model.get("Aggregation", "sum"))
     if aggregation not in _AGGREGATIONS:
         raise ValueError(
@@ -537,6 +567,7 @@ def spec_from_dict(doc, *, base_dir=None) -> TrainSpec:
         notes=notes,
         tags=_names(doc.get("Tags", ()), "Tags"),
         augmentation=augmentation,
+        guard=guard,
         base_dir=base_dir,
     )
 
@@ -625,6 +656,13 @@ def spec_to_dict(spec: TrainSpec) -> dict:
                     for k, v in inner.items()
                 }
         doc["Augmentation"] = block
+    if spec.guard is not None:
+        block = {}
+        if "margin" in spec.guard:
+            block["Margin"] = spec.guard["margin"]
+        if "quality" in spec.guard:
+            block["Quality"] = spec.guard["quality"]
+        doc["Guard"] = block if block else True
     if spec.notes is not None:
         doc["Notes"] = spec.notes
     if spec.tags:

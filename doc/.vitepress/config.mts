@@ -126,6 +126,7 @@ export default defineConfig({
         items: [
           { text: "ML data handling", link: "/ml" },
           { text: "Proximity graphs", link: "/proximity_graphs" },
+          { text: "Geometry guardrails", link: "/geometry_guardrails" },
           { text: "Dataset manifests", link: "/datasets" },
           { text: "PhysicsNeMo integration", link: "/physicsnemo" },
           { text: "Dataset dashboard", link: "/dashboard" },

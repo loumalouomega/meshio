@@ -628,6 +628,50 @@ def test_run_training_and_predict_end_to_end(tmp_path):
         in_memory.point_data["v_0_pred"], single_mesh.point_data["v_0_pred"]
     )
 
+    # v10.34.0: a run with a guardrail stores it in the card, and predicting
+    # on a wildly different mesh warns while still writing the prediction.
+    guarded_dir = tmp_path / "guarded"
+    guarded = mpn.run_training(
+        t.spec_from_dict(
+            {
+                **t.spec_to_dict(spec),
+                "RunDir": str(guarded_dir),
+                "Epochs": 1,
+                "Guard": True,
+            },
+            base_dir=str(tmp_path),
+        )
+    )
+    guarded_card = t.read_json(
+        t.card_path(guarded["best_checkpoint"] or guarded["final_checkpoint"])
+    )
+    assert "guard" in guarded_card and guarded_card["guard"]["threshold"] >= 0
+
+    # A mesh from the training split itself scores in-distribution. (The
+    # held-out c3 does NOT, and correctly so: this fixture offsets each case,
+    # so with three training cases its centroid really is outside their range
+    # -- the guard reporting that is the feature working, not a false alarm.)
+    ordinary = mpn.predict_file(
+        guarded["best_checkpoint"] or guarded["final_checkpoint"],
+        str(tmp_path / "cases" / "case_0.vtu"),
+        str(out / "guarded.vtu"),
+    )
+    assert ordinary["guard"]["verdict"] == "in"
+
+    huge = _mesh(3.0)
+    huge.points = np.asarray(huge.points) * 500.0
+    meshioplusplus.write(str(tmp_path / "huge.vtu"), huge)
+    with pytest.warns(UserWarning, match="out of the distribution"):
+        flagged = mpn.predict_file(
+            guarded["best_checkpoint"] or guarded["final_checkpoint"],
+            str(tmp_path / "huge.vtu"),
+            str(out / "huge_pred.vtu"),
+        )
+    assert flagged["guard"]["verdict"] == "out"
+    # ... and the prediction was written anyway: a model cannot refuse to
+    # answer, so the honest thing is to answer and say so loudly.
+    assert os.path.isfile(flagged["output_path"])
+
     # a periodic checkpoint predicts too (it carries a card as well)
     again = mpn.predict(
         periodic[0]["path"], manifest_path, split="test", output_dir=str(out / "p")

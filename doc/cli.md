@@ -1319,6 +1319,26 @@ meshioplusplus predict best.mdlus series.xdmf step_pred.vtu --time-step 4
 
 Everything else comes from the checkpoint's own model card, including which model family wrote it. A mesh carrying no truth predicts anyway, and the summary says the error was not measured rather than reporting one against the input itself. Needs `nvidia-physicsnemo` (and `torch_geometric` for a graph checkpoint); without them the verb fails by name and returns 1. See [PhysicsNeMo integration](physicsnemo.md#single-mesh-inference).
 
+## `guard-fit`, `guard-check`
+
+Fit a description of the shapes a dataset contains, and score a new mesh against it — the check a trained surrogate cannot make for itself.
+
+```bash
+meshioplusplus guard-fit dataset_manifest.json guard.json --split train --margin 1.5
+meshioplusplus guard-check guard.json new_part.vtu
+meshioplusplus guard-check runs/example/checkpoints/best.mdlus.card.json new_part.vtu --json
+```
+
+| flag | meaning |
+|---|---|
+| `--split S` | which split to fit on (default `train`) |
+| `--margin M` | threshold = `M` × the worst training score (default 1.5) |
+| `--no-quality` | skip the quality descriptors (faster on large meshes) |
+| `--top N` | how many descriptors `guard-check` names (default 3) |
+| `--json` | emit the raw report |
+
+`guard-check` accepts a fitted guard or a **model card** carrying one, and prints the verdict, the score against the threshold and the descriptors that put it there. The descriptors are deliberately not scale- or position-invariant: a scaled part is a different part. See [geometry guardrails](geometry_guardrails.md).
+
 ## `sdf`
 
 ```bash

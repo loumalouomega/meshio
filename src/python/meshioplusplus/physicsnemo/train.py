@@ -29,6 +29,7 @@ import os
 import signal
 import sys
 import time
+import warnings
 from typing import List, Optional
 
 import numpy as np
@@ -134,20 +135,22 @@ def _run_epoch(model, loader, norms, device, optimizer=None):
     return total / max(count, 1) if count else None
 
 
-def _write_card(spec, schema, node_stats, e_stats, path, *, epoch, valid_loss, dims):
-    write_json_atomic(
-        card_path(path),
-        card_from_run(
-            spec,
-            schema,
-            node_stats,
-            e_stats,
-            epoch=epoch,
-            valid_loss=valid_loss,
-            checkpoint=path,
-            input_dims=dims,
-        ),
+def _write_card(
+    spec, schema, node_stats, e_stats, path, *, epoch, valid_loss, dims, guard=None
+):
+    card = card_from_run(
+        spec,
+        schema,
+        node_stats,
+        e_stats,
+        epoch=epoch,
+        valid_loss=valid_loss,
+        checkpoint=path,
+        input_dims=dims,
     )
+    if guard is not None:
+        card["guard"] = guard.to_dict()
+    write_json_atomic(card_path(path), card)
 
 
 def _save_periodic(run_dir, model, optimizer, epoch, extra):
@@ -229,6 +232,7 @@ def _run_graph(spec, *, log=print) -> dict:
     write_json_atomic(os.path.join(run_dir, EDGE_STATS_FILE), e_stats)
 
     graph_kwargs = spec.graph_kwargs()
+    guard = _fit_guard(spec, manifest, log)
     # Augmentation applies to the TRAIN split only: a validation loss that
     # moves because the poses moved measures nothing.
     augmentation = None
@@ -288,6 +292,7 @@ def _run_graph(spec, *, log=print) -> dict:
             epoch=epoch,
             valid_loss=valid_loss,
             dims=dims,
+            guard=guard,
         )
 
     return _epoch_loop(
@@ -447,6 +452,7 @@ def _run_grid(spec, *, log=print) -> dict:
 
     manifest = DatasetManifest.load(manifest_path)
     read_kwargs = dict(spec.read)
+    guard = _fit_guard(spec, manifest, log)
     grid_kwargs = spec.grid_kwargs()
 
     stats = grid_stats(manifest, split=spec.train_split, **grid_kwargs, **read_kwargs)
@@ -490,17 +496,17 @@ def _run_grid(spec, *, log=print) -> dict:
         return _run_grid_epoch(model, loader, norms, device, optimizer_or_none)
 
     def write_card(path, epoch, valid_loss):
-        write_json_atomic(
-            card_path(path),
-            grid_card_from_run(
-                spec,
-                schema,
-                stats,
-                epoch=epoch,
-                valid_loss=valid_loss,
-                checkpoint=path,
-            ),
+        card = grid_card_from_run(
+            spec,
+            schema,
+            stats,
+            epoch=epoch,
+            valid_loss=valid_loss,
+            checkpoint=path,
         )
+        if guard is not None:
+            card["guard"] = guard.to_dict()
+        write_json_atomic(card_path(path), card)
 
     return _epoch_loop(
         spec,
@@ -745,6 +751,7 @@ def _predict_graph_mesh(loaded, mesh, target_mesh=None, label="mesh"):
         "rmse": (None if error is None else float(math.sqrt(float(np.mean(error**2))))),
         "max_error": None if error is None else float(error.max()),
     }
+    _check_guard(card, mesh, label, row)
     return mesh, row
 
 
@@ -810,7 +817,40 @@ def _predict_grid_mesh(loaded, mesh, target_mesh=None, label="mesh"):
     else:
         row["rmse"] = None
         row["max_error"] = None
+    _check_guard(card, mesh, label, row)
     return out_mesh, row
+
+
+def _check_guard(card, mesh, label, row):
+    """Score a mesh against the card's guardrail, if it carries one.
+
+    Advisory: the prediction is made and written either way. A model cannot
+    refuse to answer, so the honest thing is to answer and say loudly that the
+    input is unlike anything it was trained on.
+    """
+    doc = card.get("guard")
+    if not doc:
+        return
+    from .._guard import GeometryGuard
+
+    try:
+        report = GeometryGuard.from_dict(doc).check(mesh)
+    except Exception as exc:  # noqa: BLE001 -- advisory, never fatal
+        warnings.warn(
+            f"{_ERR}guard: could not score {label} ({type(exc).__name__})",
+            stacklevel=2,
+        )
+        return
+    row["guard"] = report
+    if report["verdict"] == "out":
+        worst = report["worst"][0]["name"] if report["worst"] else "?"
+        warnings.warn(
+            f"{_ERR}{label} is out of the distribution this checkpoint was "
+            f"trained on (score {report['score']:.3g} > threshold "
+            f"{report['threshold']:.3g}, worst descriptor '{worst}'); the "
+            "prediction is still written",
+            stacklevel=2,
+        )
 
 
 def predict_mesh(checkpoint, mesh, *, target_mesh=None, device="auto", label="mesh"):
@@ -883,6 +923,32 @@ def predict_file(
     row["output_path"] = str(output_path)
     row["time"] = None if time_value is None else float(time_value)
     return row
+
+
+def _fit_guard(spec, manifest, log=print):
+    """Fit the geometry guardrail on the training split, or ``None``.
+
+    Advisory by construction: a fit that fails is reported and the run goes
+    on, because a guardrail is a warning system and refusing to train for
+    want of one would be the wrong trade.
+    """
+    if not spec.guard and spec.guard != {}:
+        return None
+    from .._guard import GeometryGuard
+
+    options = dict(spec.guard or {})
+    try:
+        fitted = GeometryGuard.fit(
+            manifest, split=spec.train_split, **options, **dict(spec.read)
+        )
+    except Exception as exc:  # noqa: BLE001 -- advisory, never fatal
+        log(f"guard: could not fit ({type(exc).__name__}: {exc}); continuing")
+        return None
+    log(
+        f"guard: fitted over {fitted.schema.get('num_samples')} mesh(es), "
+        f"threshold {fitted.threshold:.4g}"
+    )
+    return fitted
 
 
 def predict(

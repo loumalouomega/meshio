@@ -74,7 +74,7 @@ By default paths are unrestricted — the server runs locally under your own acc
 
 ## Tools
 
-76 tools; the six marked *gated* need a further extra and return a named install error without it. Transforming tools take `input_path`/`output_path` (+ optional `input_format`/`output_format`, otherwise inferred from the extension) and return the written path plus a mesh summary and the operation's report.
+78 tools; the six marked *gated* need a further extra and return a named install error without it. Transforming tools take `input_path`/`output_path` (+ optional `input_format`/`output_format`, otherwise inferred from the extension) and return the written path plus a mesh summary and the operation's report.
 
 ### Inspection (read-only)
 
@@ -136,6 +136,8 @@ Jobs on the machine the server runs on (see [the dashboard](./dashboard#launchin
 | `train_stop` | SIGTERM (the trainer finishes its epoch and writes `final.mdlus`), SIGKILL after `grace_seconds` |
 | `train_checkpoints` / `train_mark_best` | the run's `.mdlus` files with epoch/validation loss/size, and which one is best |
 | `train_predict` | *gated* — predict over a split with a job's (or an explicit) checkpoint, writing `<column>_pred`/`<column>_error` back into `output_dir/<entry_id>.vtu`; returns per-entry RMSE |
+| `guard_fit` | fit a geometry guardrail over a manifest split and write it as JSON — the description a trained model is scored against |
+| `guard_check` | describe one mesh's shape, and score it against a guardrail (or a model card carrying one) if given: verdict, score against the threshold, and the descriptors that put it there |
 | `predict_file` | *gated* — predict on ONE mesh file with a trained checkpoint: no manifest, no split, no entry. Everything comes from the checkpoint's own card, including which model family wrote it; `time_step` picks a step of a multi-step input and `target_path` supplies a paired mesh. A file carrying no truth predicts anyway, with `rmse`/`max_error` null |
 
 ### Gated
