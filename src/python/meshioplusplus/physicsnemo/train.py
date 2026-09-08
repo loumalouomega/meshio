@@ -215,11 +215,14 @@ def _run_graph(spec, *, log=print) -> dict:
                 **read_kwargs,
             )
         )
+    # The SAME edge options the samples will use: statistics gathered over a
+    # different graph normalize the wrong thing, silently.
     e_stats = edge_stats(
         manifest,
         split=spec.train_split,
         kind=spec.kind,
         undirected=spec.undirected,
+        proximity=spec.proximity,
         **read_kwargs,
     )
     write_json_atomic(os.path.join(run_dir, NODE_STATS_FILE), node_stats)

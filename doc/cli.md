@@ -1283,6 +1283,25 @@ The output keeps the selected points, their `point_data` and Point regions, and 
 
 See [`doc/grids.md`](grids.md).
 
+## `proximity-graph`
+
+Build a graph from geometry rather than connectivity: the neighbourhoods a particle method needs, where the interaction radius and not a shared element is what links two points.
+
+```bash
+meshioplusplus proximity-graph particles.vtu graph.vtu --radius 0.015
+meshioplusplus proximity-graph particles.vtu graph.vtu --knn 16
+meshioplusplus proximity-graph particles.vtu graph.vtu --radius 0.015 --box 2.0   # periodic
+```
+
+| flag | meaning |
+|---|---|
+| `--radius R` | link every pair closer than `R`; one of `--radius`/`--knn` is required |
+| `--knn K` | link each point to its `K` nearest, then symmetrize (near-constant degree) |
+| `--box L` / `--box Lx,Ly,Lz` | a periodic box: pairs are linked by their minimum image, and a radius past half the smallest side is refused |
+| `--kind node\|cell` | vertices are mesh points (default) or block-major cell centroids |
+
+The graph is written as `line` cells over those positions with a `degree` point array, and the summary prints the vertex and edge counts, the degree spread and how many vertices came out isolated — the numbers that say whether the radius was well chosen. See [proximity graphs](proximity_graphs.md).
+
 ## `sdf`
 
 ```bash

@@ -75,10 +75,22 @@ s.schema        # JSON-ready: versions, columns, edge-feature rule
 | `y` | `(N, Fy)` float32¹ | a second `feature_matrix` over `target_fields`; absent when `target_fields=None`. Same-step by default; [`target_mesh`/`target_delta` pair steps](#autoregressive-t-t1-pairing) |
 | `edge_index` | `(2, E)` **int64** | [`edge_index(mesh, kind=, undirected=)`](./ml#graphs-for-gnns-edge_index) verbatim |
 | `edge_attr` | `(E, dim+1)` float32¹ | `cat((pos[row] − pos[col], ‖·‖))` — the PhysicsNeMo convention above |
+| `world_edge_index` / `world_edge_attr` | `(2, Ew)` int64 / `(Ew, dim+1)` float32¹ | present only with `world_edges`, and kept **separate** rather than concatenated |
 
 ¹ `float32=True` is the default (the training convention); `float32=False` keeps meshio++'s canonical float64. `edge_index` is int64 always.
 
 The column contract is `feature_matrix`'s, carried through: store `s.schema` at training time, compare `x_columns` at inference time, and feature drift is a named assertion instead of a silently wrong prediction.
+
+Two keyword arguments change where the edges come from, both dictionaries in [`proximity_graph`](./proximity_graphs)'s vocabulary. **`proximity`** replaces the mesh edges with a radius or k-nearest-neighbour neighbourhood — the particle case, where a state has positions and no connectivity, and where the interaction radius is what makes two points neighbours. **`world_edges`** adds a second edge set beside the mesh edges, for contact between surfaces that are near but not connected.
+
+```python
+s = mpn.graph_sample(cloud, fields=["v"], proximity={"method": "radius", "radius": 0.015})
+s = mpn.graph_sample(mesh, fields=["u"], world_edges={"method": "knn", "max_neighbors": 8})
+```
+
+The world set stays in its own arrays because PyTorch Geometric increments any attribute whose name contains `index` when it batches, so two sets batch correctly for free while a concatenated one could not be split apart afterwards. A model wanting HybridMeshGraphNet's single edge set concatenates them itself, **mesh edges first** — that model splits its edge features positionally.
+
+How the edges were built is recorded in the schema, and `graph_sample_version` moved to **3** to say so: a schema stored under an earlier release now compares unequal, which is the drift guard working. A checkpoint trained on a proximity graph must not be replayed on a mesh one.
 
 ### Streaming over a dataset: `iter_samples`, `field_stats`, `edge_stats`
 
@@ -91,7 +103,12 @@ stats = mpn.field_stats(manifest, split="train", fields=["q", "T"])
 # {"q_mean": [...], "q_std": [...], "T_mean": [...], "T_std": [...]}
 estats = mpn.edge_stats(manifest, split="train")
 # {"edge_attr_mean": [...], "edge_attr_std": [...]}
+
+# The SAME edge options training will use, or the statistics normalize the wrong graph
+estats = mpn.edge_stats(manifest, split="train", proximity={"method": "radius", "radius": 0.015})
 ```
+
+`edge_stats` takes `proximity`/`world_edges` too, and **must be given the same ones training will use**: it rebuilds the edges to gather its statistics, and statistics gathered over a different graph normalize the wrong thing with nothing downstream to report the discrepancy. Both go through one shared builder so they cannot drift, and `world_edges` adds `world_edge_mean`/`world_edge_std` to the result.
 
 All three walk a [`DatasetManifest`](./datasets) (or anything `DatasetManifest.load` accepts), resolve each entry through the sequence plan, and read one mesh at a time. The stats are per-component streaming moments in the `{field}_mean`/`{field}_std` key convention — write them with `json.dump` as `node_stats.json`/`edge_stats.json` and Gen-1 datapipes read them as-is; pass them to Gen-2's `Normalize` transform directly.
 
@@ -197,7 +214,8 @@ The spec is a **hand-editable settings document** — PascalCase keys, `"Version
   "Model": { "Name": "meshgraphnet", "ProcessorSize": 8, "HiddenDim": 64, "Aggregation": "sum" },
   "Graph": { "Regions": false, "Kind": "node", "Undirected": true,
              "EdgeFeatures": true, "Float32": true,
-             "TargetOffset": 0, "TargetDelta": false },   // graph_sample's own options
+             "TargetOffset": 0, "TargetDelta": false,     // graph_sample's own options
+             "Proximity": null },                         // or {"Method": "radius", "Radius": 0.015}
   "Read": {}, "Notes": null, "Tags": []
 }
 ```
@@ -215,6 +233,8 @@ Everything the run *writes* is a machine artefact and is snake_case (the [`write
 | `log.txt`, `job.json` | the [job manager](./dashboard#the-companion-process) | only when the run was launched as a job |
 
 **Every `.mdlus` carries a model card** (`<checkpoint>.card.json`): the field names, the `x_columns`/`y_columns` contract, and the input/output/edge normalization the model was trained under. This is the [Kratos PhysicsNeMo application](https://github.com/KratosMultiphysics/Kratos)'s convention, adopted for the same reason it exists there — a checkpoint that does not say what its channels mean is a checkpoint you can silently misuse, and writing a model's normalized output onto a physical field produces finite, plausible, completely wrong numbers. `predict` reads the card rather than being told again, and refuses by name when the columns it recomputes differ from the ones recorded (the feature-drift guard).
+
+`Graph.Proximity` builds the edges from geometry instead of connectivity, in [`proximity_graph`](./proximity_graphs)'s vocabulary (`Method` `"radius"` or `"knn"`, plus `Radius`/`MaxNeighbors` and an optional periodic `BoxSize`). A malformed block, or the other method's key, is refused when the document is read rather than an epoch later; the block is written back only when set, so a spec that does not use it is unchanged. There is deliberately no `Graph.WorldEdges` and no bistride block — no shipped model family reads a second edge set or a hierarchy, and a key a run would silently ignore is exactly what the strict unknown-key refusal exists to prevent.
 
 Two details worth knowing. The model is sized from the **recorded schema**, not from `len(Fields)`: with `Graph.Regions` on, the region one-hots widen `x`, and sizing from the field count alone would build the wrong first layer. And `SIGTERM` is honoured — the running epoch finishes, `final.mdlus` and its card are written, and the process exits 143 — which is what makes the dashboard's *Stop* button leave a usable checkpoint rather than a truncated one.
 

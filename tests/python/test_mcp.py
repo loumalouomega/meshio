@@ -467,6 +467,11 @@ _NOT_TOOLS = {
     # path-in/path-out case, writing the selected points as a point cloud.
     "PointBudget",
     "select_points",
+    # In-memory arrays: an edge index and a coarsening hierarchy are values a
+    # caller holds, not files a path-based tool could hand back.
+    "edge_vectors",
+    "bistride_hierarchy",
+    "BistrideHierarchy",
     "has_zarr",
     "to_dlpack",
     "to_cupy",
@@ -1247,3 +1252,24 @@ def test_subsample_tool_writes_a_point_cloud_and_is_json_safe(tmp_path):
     )
     assert guarded["error_type"] == "ValueError"
     assert "count is 1000 but only 98" in guarded["error"]
+
+
+def test_proximity_graph_tool_writes_the_graph_and_reports_degrees(tmp_path):
+    src = str(tmp_path / "grid.vtu")
+    meshioplusplus.write(src, meshioplusplus.grid((4, 4, 4)))
+    out = str(tmp_path / "graph.vtu")
+
+    report = _dump(_tools.tool_proximity_graph(src, out, radius=1.1))
+    expected = meshioplusplus.proximity_graph(
+        meshioplusplus.grid((4, 4, 4)), radius=1.1
+    )
+    assert report["num_vertices"] == 125
+    assert report["num_edges"] == expected.shape[1] // 2
+    assert report["cell_blocks"] == [{"type": "line", "num_cells": report["num_edges"]}]
+    assert report["num_isolated"] == 0 and report["degree_max"] == 6
+
+    knn = _dump(_tools.tool_proximity_graph(src, out, method="knn", max_neighbors=4))
+    assert knn["degree_min"] >= 4
+
+    bad = _tools.guard(_tools.tool_proximity_graph, input_path=src, output_path=out)
+    assert bad["error_type"] == "ValueError" and "positive radius" in bad["error"]

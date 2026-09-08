@@ -89,7 +89,18 @@ def edge_index(mesh, kind: str = "node", *, undirected: bool = True):
             f"meshio++: edge_index: unknown kind '{kind}' (expected node or cell)"
         )
 
-    a, b = pairs
+    return _canonical_edges(pairs[0], pairs[1], undirected)
+
+
+def _canonical_edges(a, b, undirected):
+    """Raw endpoint arrays -> the canonical ``(2, E)`` int64 edge index.
+
+    De-duplicated on the unordered pair, then emitted either once per edge
+    with ``source < target`` or in both directions, lexsorted by (source,
+    target). The single owner of that layout: :func:`edge_index` and
+    :func:`~meshioplusplus.proximity_graph` both go through it, so a mesh graph
+    and a proximity graph over the same pair set are byte-identical.
+    """
     lo = np.minimum(a, b)
     hi = np.maximum(a, b)
     order = np.lexsort((hi, lo))

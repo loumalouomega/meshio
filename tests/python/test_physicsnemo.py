@@ -301,11 +301,16 @@ def test_graph_sample_pairing_validation_errors():
         mpn.graph_sample(mesh, target_fields=["T"], target_mesh=bigger)
 
 
-def test_graph_sample_schema_v2_records_offset_and_delta():
+def test_graph_sample_schema_records_offset_delta_and_edge_options():
     s = mpn.graph_sample(_mesh(), fields=["T"])
-    assert s.schema["graph_sample_version"] == 2
+    assert s.schema["graph_sample_version"] == mpn.GRAPH_SAMPLE_VERSION == 3
     assert s.schema["target_offset"] == 0
     assert s.schema["target_delta"] is False
+    # v3: how the edges were built is part of the recorded contract, so a
+    # checkpoint trained on a proximity graph cannot be replayed on a mesh one.
+    assert s.schema["proximity"] is None
+    assert s.schema["world_edges"] is None
+    assert s.schema["world_edge_features"] == []
 
 
 def test_iter_samples_target_offset_pairs_and_shrinks(tmp_path):
@@ -809,3 +814,133 @@ def test_grid_pair_shape_matches_a_real_srresnet(tmp_path):
             f"at s={factor} the model emits {out} but the pair's target is "
             f"{sample.arrays['y'].shape}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# proximity and world edges (v10.31.0)                                        #
+# --------------------------------------------------------------------------- #
+def _cloud(n=40, seed=0):
+    """A vertex-only cloud: positions and no connectivity, so a proximity
+    neighbourhood is the only graph there is."""
+    points = np.random.RandomState(seed).rand(n, 3)
+    return Mesh(
+        points,
+        [("vertex", np.arange(n).reshape(-1, 1))],
+        point_data={"T": np.arange(n, dtype=np.float64)},
+    )
+
+
+def test_proximity_replaces_the_mesh_edges():
+    cloud = _cloud()
+    options = {"method": "radius", "radius": 0.4}
+    sample = mpn.graph_sample(cloud, fields=["T"], proximity=options)
+    assert np.array_equal(
+        sample.arrays["edge_index"], meshioplusplus.proximity_graph(cloud, **options)
+    )
+    assert np.array_equal(
+        sample.arrays["edge_attr"],
+        meshioplusplus.edge_vectors(cloud.points, sample.arrays["edge_index"]).astype(
+            np.float32
+        ),
+    )
+    assert sample.schema["proximity"] == options
+
+
+def test_world_edges_ride_beside_the_mesh_edges_rather_than_onto_them():
+    mesh = meshioplusplus.grid([3, 3, 3])
+    mesh.point_data["T"] = np.arange(len(mesh.points), dtype=np.float64)
+    options = {"method": "knn", "max_neighbors": 4}
+    sample = mpn.graph_sample(mesh, fields=["T"], world_edges=options)
+    # The mesh edges are untouched -- a world edge set adds, never replaces.
+    assert np.array_equal(sample.arrays["edge_index"], meshioplusplus.edge_index(mesh))
+    assert np.array_equal(
+        sample.arrays["world_edge_index"],
+        meshioplusplus.proximity_graph(mesh, **options),
+    )
+    assert sample.arrays["world_edge_attr"].shape == (
+        sample.arrays["world_edge_index"].shape[1],
+        4,
+    )
+    assert sample.schema["world_edges"] == options
+    assert sample.schema["world_edge_features"] == ["dx", "dy", "dz", "norm"]
+
+
+def test_a_periodic_proximity_box_reaches_the_edge_features():
+    box = 1.0
+    points = np.array([[0.01, 0.5, 0.5], [0.99, 0.5, 0.5]])
+    cloud = Mesh(
+        points,
+        [("vertex", np.arange(2).reshape(-1, 1))],
+        point_data={"T": np.zeros(2)},
+    )
+    sample = mpn.graph_sample(
+        cloud,
+        fields=["T"],
+        proximity={"method": "radius", "radius": 0.05, "box_size": box},
+    )
+    # Hand-computed: the short image is 0.02 across the seam. A box that
+    # reached the search but not the features would report 0.98 here.
+    assert sample.arrays["edge_attr"][0, 3] == pytest.approx(0.02)
+
+
+def test_edge_stats_uses_the_same_edges_the_samples_will(tmp_path):
+    manifest = _manifest(tmp_path)
+    options = {"method": "knn", "max_neighbors": 3}
+    stats = mpn.edge_stats(manifest, proximity=options)
+    # Recomputed by hand over the same entries, through the public builders.
+    accumulated = []
+    for entry in manifest.entries():
+        for _, mesh in entry.time_series():
+            edges = meshioplusplus.proximity_graph(mesh, **options)
+            accumulated.append(meshioplusplus.edge_vectors(mesh.points, edges))
+    reference = np.concatenate(accumulated)
+    assert stats["edge_mean"] == pytest.approx(reference.mean(axis=0).tolist())
+    # And they are genuinely different from the mesh-edge statistics.
+    assert stats["edge_mean"] != mpn.edge_stats(manifest)["edge_mean"]
+
+
+def test_edge_stats_reports_world_edges_separately(tmp_path):
+    manifest = _manifest(tmp_path)
+    stats = mpn.edge_stats(manifest, world_edges={"method": "knn", "max_neighbors": 2})
+    assert stats["edge_mean"] == mpn.edge_stats(manifest)["edge_mean"]
+    assert len(stats["world_edge_mean"]) == 4
+    assert "world_edge_mean" not in mpn.edge_stats(manifest)
+
+
+def test_proximity_reaches_the_iteration_layer(tmp_path):
+    manifest = _manifest(tmp_path)
+    samples = list(
+        mpn.iter_samples(
+            manifest,
+            fields=["T"],
+            proximity={"method": "radius", "radius": 5.0},
+        )
+    )
+    assert samples and all(s.schema["proximity"] is not None for _, _, s in samples)
+
+
+def test_a_batch_keeps_the_two_edge_sets_apart(tmp_path):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
+    from torch_geometric.data import Data
+    from torch_geometric.loader import DataLoader
+
+    mesh = meshioplusplus.grid([3, 3, 3])
+    mesh.point_data["T"] = np.arange(len(mesh.points), dtype=np.float64)
+    sample = mpn.graph_sample(
+        mesh, fields=["T"], world_edges={"method": "knn", "max_neighbors": 4}
+    )
+    n = sample.arrays["pos"].shape[0]
+    graphs = [
+        Data(
+            x=torch.from_numpy(sample.arrays["x"]),
+            edge_index=torch.from_numpy(sample.arrays["edge_index"]),
+            world_edge_index=torch.from_numpy(sample.arrays["world_edge_index"]),
+        )
+        for _ in range(2)
+    ]
+    batch = next(iter(DataLoader(graphs, batch_size=2)))
+    # PyG increments any attribute whose name contains "index", which is the
+    # whole reason the two sets are kept apart rather than concatenated.
+    assert int(batch.world_edge_index.max()) >= n
+    assert int(batch.edge_index.max()) >= n

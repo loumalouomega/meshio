@@ -125,6 +125,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "ML data handling", link: "/ml" },
+          { text: "Proximity graphs", link: "/proximity_graphs" },
           { text: "Dataset manifests", link: "/datasets" },
           { text: "PhysicsNeMo integration", link: "/physicsnemo" },
           { text: "Dataset dashboard", link: "/dashboard" },

@@ -28,6 +28,7 @@ from . import (
     _partition,
     _pipeline,
     _point_budget,
+    _proximity,
     _quality,
     _refine,
     _regions,
@@ -199,6 +200,13 @@ def main(argv=None):
     )
     _point_budget.add_args(parser)
     parser.set_defaults(func=_point_budget.subsample_cmd)
+
+    parser = subparsers.add_parser(
+        "proximity-graph",
+        help="Build a radius or k-nearest-neighbour graph over a mesh's points",
+    )
+    _proximity.add_args(parser)
+    parser.set_defaults(func=_proximity.proximity_cmd)
 
     parser = subparsers.add_parser(
         "sdf",

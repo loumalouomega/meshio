@@ -802,6 +802,16 @@ cloud  = mio.subsample_points(mesh, budget)                # a vertex-block poin
 
 The selection is kept in selection order, so one farthest-point budget at 8192 serves 4096 and 2048 by slicing. See [point-cloud budgets](https://loumalouomega.github.io/meshioplusplus/point_budgets.html).
 
+For a **particle** method there is no connectivity to build a graph from at all — a smoothed-particle or discrete-element state is a cloud of positions, and what makes two particles interact is the interaction radius:
+
+```python
+edges = mio.proximity_graph(cloud, radius=0.015)                    # or method="knn", max_neighbors=16
+edges = mio.proximity_graph(cloud, radius=0.015, box_size=[2, 2, 2])  # periodic: minimum image
+attrs = mio.edge_vectors(cloud.points, edges)                       # displacement, then its norm
+```
+
+The same call adds *world* edges beside a mesh's own — contact between surfaces that are near but not connected — and `bistride_hierarchy` coarsens a graph so a signal crosses the mesh in logarithmically many message-passing steps. See [proximity graphs](https://loumalouomega.github.io/meshioplusplus/proximity_graphs.html).
+
 If PhysicsNeMo itself is unfamiliar, [**PhysicsNeMo basics**](https://loumalouomega.github.io/meshioplusplus/physicsnemo/overview.html) is a fourteen-page map of the framework — what a `Module` and a `.mdlus` checkpoint are, which of the 25 architecture families fits the shape of your data, how simulation output becomes batched tensors, and where meshio++ ends and the framework begins. Each page closes by naming what meshio++ supplies, or by saying plainly that nothing does.
 
 ### MCP server
@@ -912,7 +922,7 @@ cmake --build build && cmake --install build --prefix /opt/meshioplusplus
 ```
 
 ```cmake
-find_package(meshioplusplus 10.30.0 EXACT CONFIG REQUIRED COMPONENTS CXX)
+find_package(meshioplusplus 10.31.0 EXACT CONFIG REQUIRED COMPONENTS CXX)
 target_link_libraries(my_solver PRIVATE meshioplusplus::core)
 ```
 

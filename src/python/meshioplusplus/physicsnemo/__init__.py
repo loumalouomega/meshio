@@ -32,7 +32,7 @@ from .._gpu import _require_framework
 from .._grid_transfer import GridSpec
 from .._interop import _emit, _importable
 from .._ml import FEATURE_SCHEMA_VERSION, edge_index, feature_matrix
-from .._regions import block_bases
+from .._proximity import _graph_positions, edge_vectors, proximity_graph
 from ._train import TrainSpec, default_spec, load_spec
 
 __all__ = [
@@ -61,7 +61,8 @@ __all__ = [
 # Version 2 (v9.30.0): the schema gained `target_offset`/`target_delta` --
 # the documented bump rule (a stored v1 schema now compares unequal, which is
 # the drift guard doing its job).
-GRAPH_SAMPLE_VERSION = 2
+# Version 3 (v10.31.0): and `proximity`/`world_edges`/`world_edge_features`.
+GRAPH_SAMPLE_VERSION = 3
 
 _DOC = "doc/physicsnemo.md"
 
@@ -80,6 +81,8 @@ _GRAPH_KWARGS = (
     "undirected",
     "edge_features",
     "float32",
+    "proximity",
+    "world_edges",
 )
 
 
@@ -114,24 +117,51 @@ class GraphSample:
 
 def _positions(mesh, kind):
     """Graph-vertex positions: mesh points for the node graph, block-major
-    cell centroids (the `partition` numbering) for the cell dual."""
-    points = np.ascontiguousarray(np.asarray(mesh.points, dtype=np.float64))
-    if kind == "node":
-        return points
-    from .._partition import _centroids
+    cell centroids (the `partition` numbering) for the cell dual.
 
-    total = block_bases(mesh.cells)[-1] if mesh.cells else 0
-    dim = min(points.shape[1] if points.ndim == 2 else 0, 3)
-    return np.ascontiguousarray(_centroids(mesh, total)[:, :dim])
+    One line over ``_proximity._graph_positions``, which is the single owner:
+    a proximity graph and a mesh graph over the same mesh must agree on where
+    its vertices are, or their edge features describe different geometry.
+    """
+    return _graph_positions(mesh, kind)
 
 
-def _edge_attributes(pos, ei):
+def _edge_attributes(pos, ei, box_size=None):
     """The PhysicsNeMo MeshGraphNet edge-feature convention, exactly:
-    relative displacement (source minus destination) plus its norm."""
-    row, col = ei
-    disp = pos[row] - pos[col]
-    norm = np.linalg.norm(disp, axis=-1, keepdims=True)
-    return np.concatenate((disp, norm), axis=-1)
+    relative displacement (source minus destination) plus its norm.
+
+    :func:`~meshioplusplus.edge_vectors` is the owner; ``box_size`` carries a
+    periodic box through, so an edge across a boundary is short rather than
+    box-length.
+    """
+    return edge_vectors(pos, ei, box_size=box_size)
+
+
+def _sample_edges(mesh, kind, undirected, proximity, world_edges):
+    """The edge sets of one sample: ``(edge_index, world_edge_index)``.
+
+    The single owner of "which edges does this configuration mean", shared by
+    :func:`graph_sample` and :func:`edge_stats` -- statistics gathered over a
+    different graph than the model trains on normalize the wrong thing, and
+    nothing downstream would report the discrepancy.
+
+    ``proximity`` **replaces** the mesh edges: a particle state has positions
+    and no connectivity, so there is nothing to replace them with but a
+    neighbourhood rule. ``world_edges`` **adds** a second set alongside them --
+    contact between surfaces that are near but not connected.
+    """
+    if proximity is None:
+        ei = edge_index(mesh, kind=kind, undirected=undirected)
+    else:
+        ei = proximity_graph(mesh, kind=kind, undirected=undirected, **dict(proximity))
+    world = (
+        None
+        if world_edges is None
+        else proximity_graph(
+            mesh, kind=kind, undirected=undirected, **dict(world_edges)
+        )
+    )
+    return ei, world
 
 
 def graph_sample(
@@ -147,6 +177,8 @@ def graph_sample(
     undirected=True,
     edge_features=True,
     float32=True,
+    proximity=None,
+    world_edges=None,
 ):
     """One mesh as one GNN training sample.
 
@@ -168,6 +200,20 @@ def graph_sample(
       to cell centroids and cell-located data, so the sample stays coherent.
     - ``edge_attr`` -- ``cat((pos[row] - pos[col], ||.||))``, the stable
       PhysicsNeMo convention; ``edge_features=False`` skips it.
+    - ``world_edge_index``/``world_edge_attr`` -- present only with
+      ``world_edges``, and kept as **separate arrays** rather than
+      concatenated onto the mesh edges. PyTorch Geometric increments any
+      attribute whose name contains ``index`` when it batches, so two edge
+      sets batch correctly for free, while a concatenated one could not be
+      split apart again afterwards. A model wanting the single edge set
+      HybridMeshGraphNet expects concatenates them itself, mesh edges first.
+
+    ``proximity`` and ``world_edges`` are dicts in
+    :func:`~meshioplusplus.proximity_graph`'s vocabulary
+    (``{"method", "radius", "max_neighbors", "box_size"}``). ``proximity``
+    **replaces** the mesh edges -- the particle case, where a cloud has
+    positions and no connectivity -- while ``world_edges`` **adds** a second
+    set beside them.
 
     ``target_offset`` is pure metadata recorded in the schema -- this
     function sees two meshes, not a series, so the iteration layer
@@ -199,13 +245,16 @@ def graph_sample(
 
     pos = _positions(mesh, kind)
     fmx = feature_matrix(mesh, location, fields=fields, coords=False, regions=regions)
-    ei = edge_index(mesh, kind=kind, undirected=undirected)
+    ei, world_ei = _sample_edges(mesh, kind, undirected, proximity, world_edges)
+    box = None if proximity is None else proximity.get("box_size")
 
     arrays = {
         "pos": pos.astype(float_dtype, copy=False),
         "x": fmx.matrix.astype(float_dtype, copy=False),
         "edge_index": ei,
     }
+    if world_ei is not None:
+        arrays["world_edge_index"] = world_ei
     y_columns = ()
     y_sources = []
     if target_fields is not None:
@@ -234,7 +283,13 @@ def graph_sample(
         y_columns = fmy.columns
         y_sources = fmy.schema["sources"]
     if edge_features:
-        arrays["edge_attr"] = _edge_attributes(pos, ei).astype(float_dtype, copy=False)
+        arrays["edge_attr"] = _edge_attributes(pos, ei, box).astype(
+            float_dtype, copy=False
+        )
+        if world_ei is not None:
+            arrays["world_edge_attr"] = _edge_attributes(
+                pos, world_ei, world_edges.get("box_size")
+            ).astype(float_dtype, copy=False)
 
     schema = {
         "graph_sample_version": GRAPH_SAMPLE_VERSION,
@@ -250,6 +305,13 @@ def graph_sample(
         "edge_features": (
             ["d" + "xyz"[i] for i in range(pos.shape[1])] + ["norm"]
             if edge_features
+            else []
+        ),
+        "proximity": None if proximity is None else dict(proximity),
+        "world_edges": None if world_edges is None else dict(world_edges),
+        "world_edge_features": (
+            ["d" + "xyz"[i] for i in range(pos.shape[1])] + ["norm"]
+            if edge_features and world_ei is not None
             else []
         ),
         "x_sources": fmx.schema["sources"],
@@ -714,30 +776,63 @@ def field_stats(
     return stats
 
 
-def edge_stats(manifest, *, split=None, kind="node", undirected=True, **read_kwargs):
+def edge_stats(
+    manifest,
+    *,
+    split=None,
+    kind="node",
+    undirected=True,
+    proximity=None,
+    world_edges=None,
+    **read_kwargs,
+):
     """Edge-feature normalization stats over a manifest, streaming.
 
     Returns ``{"edge_mean": [...], "edge_std": [...]}`` per component of the
     ``(disp, norm)`` edge attribute -- the Gen-1 ``edge_stats.json`` key
-    convention.
+    convention -- plus ``world_edge_mean``/``world_edge_std`` when
+    ``world_edges`` is given.
+
+    ``proximity``/``world_edges`` must be the SAME options training will use:
+    the edges are rebuilt here, through the same :func:`_sample_edges`, and
+    statistics gathered over a different graph normalize the wrong thing.
     """
     acc = None
+    world_acc = None
+    box = None if proximity is None else proximity.get("box_size")
+    world_box = None if world_edges is None else world_edges.get("box_size")
+
+    def _fold(accumulator, attr, name):
+        if accumulator is None:
+            accumulator = _Moments(attr.shape[1])
+        elif accumulator.total.shape[0] != attr.shape[1]:
+            raise ValueError(
+                f"meshio++: edge_stats: the {name} width changes across the "
+                f"dataset ({accumulator.total.shape[0]} vs {attr.shape[1]})"
+            )
+        accumulator.add(attr)
+        return accumulator
+
     for entry in _as_manifest(manifest).entries(split=split):
         for _, mesh in entry.time_series(**read_kwargs):
             pos = _positions(mesh, kind)
-            ei = edge_index(mesh, kind=kind, undirected=undirected)
-            attr = _edge_attributes(pos, ei)
-            if acc is None:
-                acc = _Moments(attr.shape[1])
-            elif acc.total.shape[0] != attr.shape[1]:
-                raise ValueError(
-                    "meshio++: edge_stats: the edge-attribute width changes "
-                    f"across the dataset ({acc.total.shape[0]} vs {attr.shape[1]})"
+            ei, world_ei = _sample_edges(mesh, kind, undirected, proximity, world_edges)
+            acc = _fold(acc, _edge_attributes(pos, ei, box), "edge-attribute")
+            if world_ei is not None:
+                world_acc = _fold(
+                    world_acc,
+                    _edge_attributes(pos, world_ei, world_box),
+                    "world-edge-attribute",
                 )
-            acc.add(attr)
-    if acc is None:
-        return {"edge_mean": [], "edge_std": []}
-    return {"edge_mean": acc.mean().tolist(), "edge_std": acc.std().tolist()}
+    out = (
+        {"edge_mean": [], "edge_std": []}
+        if acc is None
+        else {"edge_mean": acc.mean().tolist(), "edge_std": acc.std().tolist()}
+    )
+    if world_edges is not None:
+        out["world_edge_mean"] = [] if world_acc is None else world_acc.mean().tolist()
+        out["world_edge_std"] = [] if world_acc is None else world_acc.std().tolist()
+    return out
 
 
 # --------------------------------------------------------------------------- #

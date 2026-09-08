@@ -395,3 +395,79 @@ def test_grid_kwargs_describe_the_pair():
     assert kwargs["scaling_factor"] == 2
     assert kwargs["coarse"]["resolution"] == [8, 8, 8]
     assert kwargs["fields"] == ["T"] and kwargs["target_fields"] == ["T"]
+
+
+# --------------------------------------------------------------------------- #
+# Graph.Proximity (v10.31.0)                                                  #
+# --------------------------------------------------------------------------- #
+def test_graph_proximity_round_trips_and_reaches_the_sample_kwargs():
+    doc = dict(DOC)
+    doc["Graph"] = {"Proximity": {"Method": "radius", "Radius": 0.05}}
+    spec = t.spec_from_dict(doc)
+    assert spec.proximity == {"method": "radius", "radius": 0.05}
+    assert spec.graph_kwargs()["proximity"] == {"method": "radius", "radius": 0.05}
+    assert t.spec_to_dict(spec)["Graph"]["Proximity"] == {
+        "Method": "radius",
+        "Radius": 0.05,
+    }
+
+
+def test_graph_proximity_carries_a_periodic_box():
+    doc = dict(DOC)
+    doc["Graph"] = {
+        "Proximity": {"Method": "knn", "MaxNeighbors": 8, "BoxSize": [1.0, 2.0, 3.0]}
+    }
+    spec = t.spec_from_dict(doc)
+    assert spec.proximity == {
+        "method": "knn",
+        "max_neighbors": 8,
+        "box_size": [1.0, 2.0, 3.0],
+    }
+    assert t.spec_to_dict(spec)["Graph"]["Proximity"]["BoxSize"] == [1.0, 2.0, 3.0]
+
+
+def test_an_unset_proximity_leaves_the_document_exactly_as_it_was():
+    # The v10.30.0 shape, byte for byte: a key nobody asked for must not
+    # appear in a spec that does not use the feature.
+    spec = t.spec_from_dict(dict(DOC))
+    assert spec.proximity is None
+    assert "Proximity" not in t.spec_to_dict(spec)["Graph"]
+    assert spec.graph_kwargs()["proximity"] is None
+
+
+@pytest.mark.parametrize(
+    "block, message",
+    [
+        ({"Method": "tree", "Radius": 1.0}, "Method must be one of"),
+        ({"Method": "radius"}, "Radius must be a positive number"),
+        ({"Method": "radius", "Radius": 0.0}, "Radius must be a positive number"),
+        (
+            {"Method": "radius", "Radius": 1.0, "MaxNeighbors": 4},
+            "MaxNeighbors belongs to Method 'knn'",
+        ),
+        ({"Method": "knn", "Radius": 1.0}, "Radius belongs to Method 'radius'"),
+        ({"Method": "knn", "MaxNeighbors": 0}, "MaxNeighbors must be an integer"),
+        ({"Method": "radius", "Radius": 1.0, "Cutoff": 2}, "unknown key 'Cutoff'"),
+        (
+            {"Method": "radius", "Radius": 1.0, "BoxSize": "big"},
+            "BoxSize must be a positive number",
+        ),
+        (
+            {"Method": "radius", "Radius": 1.0, "BoxSize": [1.0, -2.0]},
+            "BoxSize must be a positive number",
+        ),
+    ],
+)
+def test_a_malformed_proximity_block_names_the_offender(block, message):
+    doc = dict(DOC)
+    doc["Graph"] = {"Proximity": block}
+    with pytest.raises(ValueError, match=re.escape(message)):
+        t.spec_from_dict(doc)
+
+
+def test_proximity_is_a_graph_key_and_not_a_grid_one():
+    doc = dict(DOC)
+    doc["Model"] = {"Name": "srresnet"}
+    doc["Grid"] = {"Resolution": [4, 4, 4], "Proximity": {"Method": "radius"}}
+    with pytest.raises(ValueError, match="unknown key 'Proximity' in Grid"):
+        t.spec_from_dict(doc)

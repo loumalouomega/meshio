@@ -121,6 +121,7 @@ _GRAPH_KEYS = (
     "Float32",
     "TargetOffset",
     "TargetDelta",
+    "Proximity",
 )
 _GRID_KEYS = (
     "Resolution",
@@ -144,6 +145,13 @@ _FAMILY_BLOCK = {"meshgraphnet": "Graph", "srresnet": "Grid"}
 #: the spec key instead of surfacing from inside torch.
 _SCALING_FACTORS = (2, 4, 8)
 _KINDS = ("node", "cell")
+#: `Graph.Proximity` builds the edges from geometry instead of connectivity,
+#: in `meshioplusplus.proximity_graph`'s vocabulary. There is deliberately no
+#: `Graph.WorldEdges` or bistride block: no shipped model family reads a
+#: second edge set, and a key a run would silently ignore is exactly what the
+#: strict unknown-key refusal exists to prevent.
+_PROXIMITY_KEYS = ("Method", "Radius", "MaxNeighbors", "BoxSize")
+_PROXIMITY_METHODS = ("radius", "knn")
 _AGGREGATIONS = ("sum", "mean")
 _DEVICES_PREFIX = ("auto", "cpu", "cuda")
 
@@ -186,6 +194,56 @@ def _bool(value, where):
     return value
 
 
+def _proximity(value, where):
+    """`Graph.Proximity` -> the snake_case dict `proximity_graph` takes.
+
+    Validated here rather than left to the first sample: a malformed
+    neighbourhood should fail when the document is read, not an epoch later.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{_ERR}{where} must be an object")
+    _check_keys(value, where, _PROXIMITY_KEYS)
+    method = value.get("Method", "radius")
+    if method not in _PROXIMITY_METHODS:
+        raise ValueError(
+            f"{_ERR}{where}.Method must be one of "
+            f"{', '.join(_PROXIMITY_METHODS)}, not {method!r}"
+        )
+    out = {"method": method}
+    if method == "radius":
+        if "MaxNeighbors" in value:
+            raise ValueError(f"{_ERR}{where}.MaxNeighbors belongs to Method 'knn'")
+        radius = value.get("Radius")
+        if not isinstance(radius, (int, float)) or isinstance(radius, bool):
+            raise ValueError(f"{_ERR}{where}.Radius must be a positive number")
+        if radius <= 0:
+            raise ValueError(f"{_ERR}{where}.Radius must be a positive number")
+        out["radius"] = float(radius)
+    else:
+        if "Radius" in value:
+            raise ValueError(f"{_ERR}{where}.Radius belongs to Method 'radius'")
+        out["max_neighbors"] = _int(
+            value.get("MaxNeighbors", 0), f"{where}.MaxNeighbors", 1
+        )
+    box = value.get("BoxSize")
+    if box not in (None, []):
+        if isinstance(box, (int, float)) and not isinstance(box, bool):
+            box = [float(box)]
+        elif isinstance(box, (list, tuple)) and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+            for v in box
+        ):
+            box = [float(v) for v in box]
+        else:
+            raise ValueError(
+                f"{_ERR}{where}.BoxSize must be a positive number or a list of them"
+            )
+        out["box_size"] = box
+    return out
+
+
 @dataclass(frozen=True)
 class TrainSpec:
     """A training run's inputs -- the PascalCase document, typed.
@@ -225,6 +283,7 @@ class TrainSpec:
     float32: bool = True
     target_offset: int = 0
     target_delta: bool = False
+    proximity: Optional[Dict[str, Any]] = None
     # Grid (srresnet); resolution/cell_size are the `GridSpec.from_mesh` pair
     resolution: Optional[Tuple[int, int, int]] = None
     cell_size: Optional[float] = None
@@ -286,7 +345,20 @@ class TrainSpec:
             "float32": self.float32,
             "target_offset": self.target_offset,
             "target_delta": self.target_delta,
+            "proximity": None if self.proximity is None else dict(self.proximity),
         }
+
+
+def _proximity_to_document(proximity):
+    """The inverse of :func:`_proximity`: snake_case back to the document."""
+    doc = {"Method": proximity["method"]}
+    if "radius" in proximity:
+        doc["Radius"] = proximity["radius"]
+    if "max_neighbors" in proximity:
+        doc["MaxNeighbors"] = proximity["max_neighbors"]
+    if "box_size" in proximity:
+        doc["BoxSize"] = list(proximity["box_size"])
+    return doc
 
 
 def _resolve_against(path, base_dir):
@@ -431,6 +503,7 @@ def spec_from_dict(doc, *, base_dir=None) -> TrainSpec:
         float32=_bool(graph.get("Float32", True), "Graph.Float32"),
         target_offset=_int(graph.get("TargetOffset", 0), "Graph.TargetOffset"),
         target_delta=_bool(graph.get("TargetDelta", False), "Graph.TargetDelta"),
+        proximity=_proximity(graph.get("Proximity"), "Graph.Proximity"),
         resolution=resolution,
         cell_size=cell_size,
         bounds=bounds,
@@ -514,6 +587,8 @@ def spec_to_dict(spec: TrainSpec) -> dict:
             "TargetOffset": spec.target_offset,
             "TargetDelta": spec.target_delta,
         }
+        if spec.proximity is not None:
+            doc["Graph"]["Proximity"] = _proximity_to_document(spec.proximity)
     if spec.read:
         doc["Read"] = dict(spec.read)
     if spec.notes is not None:

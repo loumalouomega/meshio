@@ -671,6 +671,42 @@ def _register_operations(server: FastMCP) -> None:
         )
 
     @server.tool()
+    def proximity_graph(
+        input_path: str,
+        output_path: str,
+        input_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        method: str = "radius",
+        radius: Optional[float] = None,
+        max_neighbors: Optional[int] = None,
+        box_size: Optional[List[float]] = None,
+        kind: str = "node",
+    ) -> dict:
+        """Build a graph from geometry rather than connectivity, for a particle
+        state that has positions and no cells, or for contact edges between
+        surfaces that are near but not connected. method is 'radius' (every pair
+        closer than radius -- the physical interaction cutoff, degree varies with
+        density) or 'knn' (each point's max_neighbors nearest, then symmetrized,
+        so degree is near-constant). box_size (one value or one per axis) turns
+        on the periodic minimum-image convention, so a pair either side of a
+        boundary is linked by its short image; a radius past half the smallest
+        box side is refused, the minimum image being ambiguous there. kind is
+        'node' (mesh points) or 'cell' (cell centroids). The output is the graph
+        as line cells over those positions, with a 'degree' point array."""
+        return _guard(
+            _tools.tool_proximity_graph,
+            input_path=input_path,
+            output_path=output_path,
+            input_format=input_format,
+            output_format=output_format,
+            method=method,
+            radius=radius,
+            max_neighbors=max_neighbors,
+            box_size=box_size,
+            kind=kind,
+        )
+
+    @server.tool()
     def compute_sdf(
         input_path: str,
         output_path: str,

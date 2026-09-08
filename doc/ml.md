@@ -30,6 +30,8 @@ Returns a `(2, E)` C-contiguous **int64** array — rows are source and target i
 
 `undirected=True` (default) emits **both** directions of every edge — the PyG convention for undirected graphs — sorted lexicographically by (source, target), so the output is deterministic and byte-identical across runs.
 
+A graph built from *connectivity* is the wrong graph for a particle state, which has positions and no cells: there the interaction radius decides what a neighbour is. [`proximity_graph`](proximity_graphs.md) builds that one — radius or k-nearest-neighbour, with a periodic minimum-image mode — through the same canonicalization, so its output is byte-identical to `edge_index`'s for the same pair set.
+
 ```python
 import torch
 from torch_geometric.data import Data

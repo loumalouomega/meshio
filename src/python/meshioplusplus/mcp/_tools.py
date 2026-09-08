@@ -71,6 +71,7 @@ from .. import (
     partition,
     point_data_to_cell_data,
     power_spectrum,
+    proximity_graph,
     read,
     read_metadata,
     refine,
@@ -1059,6 +1060,53 @@ def tool_subsample(
         method=method,
         count=int(len(out.points)),
         num_source_points=int(len(mesh.points)),
+    )
+
+
+def tool_proximity_graph(
+    input_path,
+    output_path,
+    input_format=None,
+    output_format=None,
+    method="radius",
+    radius=None,
+    max_neighbors=None,
+    box_size=None,
+    kind="node",
+):
+    """Build a radius or k-nearest-neighbour graph over a mesh's points or cell centroids."""
+    import numpy as np
+
+    from .._mesh import Mesh
+    from .._proximity import _graph_positions
+
+    mesh = _load(input_path, input_format)
+    edges = proximity_graph(
+        mesh,
+        method=method,
+        radius=radius,
+        max_neighbors=max_neighbors,
+        box_size=box_size,
+        kind=kind,
+    )
+    points = _graph_positions(mesh, kind)
+    half = edges[:, edges[0] < edges[1]]
+    degree = np.bincount(edges[0], minlength=len(points)).astype(np.int64)
+    out = Mesh(
+        points,
+        [("line", np.ascontiguousarray(half.T))],
+        point_data={"degree": degree},
+    )
+    return _result(
+        _store(out, output_path, output_format),
+        out,
+        method=method,
+        num_vertices=int(len(points)),
+        num_edges=int(half.shape[1]),
+        degree_min=int(degree.min()) if degree.size else 0,
+        degree_mean=float(degree.mean()) if degree.size else 0.0,
+        degree_max=int(degree.max()) if degree.size else 0,
+        num_isolated=int((degree == 0).sum()),
     )
 
 
@@ -2635,6 +2683,14 @@ TOOL_REGISTRY = OrderedDict(
         (
             "subsample",
             {"fn": tool_subsample, "wraps": ("subsample_points",), "gated": None},
+        ),
+        (
+            "proximity_graph",
+            {
+                "fn": tool_proximity_graph,
+                "wraps": ("proximity_graph",),
+                "gated": None,
+            },
         ),
         (
             "compute_sdf",

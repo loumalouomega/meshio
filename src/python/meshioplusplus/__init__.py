@@ -130,6 +130,12 @@ from ._optimize_volume import optimize_volume
 from ._partition import partition, partition_labels
 from ._pipeline import run_pipeline
 from ._point_budget import PointBudget, select_points, subsample_points
+from ._proximity import (
+    BistrideHierarchy,
+    bistride_hierarchy,
+    edge_vectors,
+    proximity_graph,
+)
 from ._quality import attach_quality, compute_quality
 from ._refine import refine
 from ._regions import Region
@@ -316,6 +322,10 @@ __all__ = [
     "PointBudget",
     "select_points",
     "subsample_points",
+    "BistrideHierarchy",
+    "bistride_hierarchy",
+    "edge_vectors",
+    "proximity_graph",
     "DatasetManifest",
     "DatasetEntry",
     "to_dlpack",
