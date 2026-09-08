@@ -1174,6 +1174,9 @@ program test_fortran_api
     ! ---- regular grids and signed distance -------------------------------
     call check_grids_and_distance()
 
+    ! ---- per-vertex curvature --------------------------------------------
+    call check_curvature()
+
     if (fails /= 0) then
         write (error_unit, '(a,i0,a)') 'test_fortran_api: ', fails, ' check(s) FAILED'
         error stop 1
@@ -1382,6 +1385,59 @@ contains
         call field%free()
         call g%free()
         call cube%free()
+    end subroutine
+
+    subroutine check_curvature()
+        type(mio_mesh) :: oct, curv, bad
+        integer(int64) :: nb, ni, nd, incons
+        real(real64) :: defect
+        logical :: wt
+        integer :: ierr
+        real(real64) :: oct_points(3, 6)
+        integer(int64) :: oct_conn(3, 8)
+
+        ! A regular octahedron: the smallest closed, consistently wound
+        ! triangle surface, so Gauss-Bonnet applies exactly.
+        oct_points = reshape([ 1.0_real64,  0.0_real64,  0.0_real64, &
+                              -1.0_real64,  0.0_real64,  0.0_real64, &
+                               0.0_real64,  1.0_real64,  0.0_real64, &
+                               0.0_real64, -1.0_real64,  0.0_real64, &
+                               0.0_real64,  0.0_real64,  1.0_real64, &
+                               0.0_real64,  0.0_real64, -1.0_real64], [3, 6])
+        oct_conn = reshape([1_int64, 3_int64, 5_int64, &
+                            3_int64, 2_int64, 5_int64, &
+                            2_int64, 4_int64, 5_int64, &
+                            4_int64, 1_int64, 5_int64, &
+                            3_int64, 1_int64, 6_int64, &
+                            2_int64, 3_int64, 6_int64, &
+                            4_int64, 2_int64, 6_int64, &
+                            1_int64, 4_int64, 6_int64], [3, 8])
+        call oct%create()
+        call oct%set_points(oct_points)
+        call oct%add_cell_block('triangle', oct_conn)
+
+        curv = oct%curvature(record_principal=.true., num_boundary=nb, &
+                             num_isolated=ni, num_degenerate=nd, &
+                             total_angle_defect=defect, inconsistent_pairs=incons, &
+                             watertight=wt, stat=ierr)
+        call check(ierr == 0, 'curvature succeeded')
+        ! The tessellation-independent oracle: on a closed surface the angle
+        ! defects sum to 2*pi*chi, which is 4*pi for anything sphere-like.
+        call check(abs(defect - 4.0_real64*3.141592653589793_real64) < 1.0e-12_real64, &
+                   'curvature satisfies Gauss-Bonnet on a closed surface')
+        call check(nb == 0_int64, 'a closed surface has no boundary vertices')
+        call check(ni == 0_int64, 'no isolated vertices')
+        call check(nd == 0_int64, 'no degenerate triangles')
+        call check(incons == 0_int64, 'the octahedron is consistently wound')
+        call check(wt, 'the octahedron is watertight')
+        call check(curv%num_points() == 6_int64, 'curvature is a pure data step')
+        call check(curv%num_point_data() >= 3_int64, 'curvature attached its arrays')
+        call curv%free()
+
+        ! An unknown dual area is refused by name rather than silently defaulted.
+        bad = oct%curvature(dual_area='nope', stat=ierr)
+        call check(ierr /= 0, 'curvature rejects an unknown dual area')
+        call oct%free()
     end subroutine
 
     subroutine check(ok, what)

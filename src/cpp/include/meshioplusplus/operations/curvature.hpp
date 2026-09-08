@@ -92,6 +92,19 @@ enum class CurvatureDualArea : std::uint8_t {
     Barycentric = 1,
 };
 
+/**
+ * @brief Parses a dual-area name.
+ * @param rName One of `"mixed-voronoi"`, `"barycentric"` (case-sensitive, as
+ *        elsewhere in the operations layer).
+ * @return The matching enumerator.
+ * @throws std::invalid_argument if the name is not recognised.
+ */
+MESHIOPLUSPLUS_API CurvatureDualArea curvature_dual_area_from_name(const std::string& rName);
+
+/// The spelling `curvature_dual_area_from_name` accepts for `Mode`, so the flat
+/// bindings, both CLIs and the pipeline report a name a caller can pass back.
+MESHIOPLUSPLUS_API const char* curvature_dual_area_name(CurvatureDualArea Mode);
+
 /// What `compute_curvature` should compute and attach.
 struct CurvatureOptions {
     /// Attach `curvature:mean`.

@@ -82,6 +82,7 @@
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/conservative_interpolate.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
+#include "meshioplusplus/operations/curvature.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/decimate.hpp"
@@ -1531,6 +1532,48 @@ PYBIND11_MODULE(_core, m) {
     // entirely as a composition of two `gradient` calls. See
     // operations/hessian.hpp for the exactness argument and the scalar-only
     // scope.
+    // Per-vertex mean and Gaussian curvature of a surface. The result carries
+    // `total_angle_defect` on purpose: for a closed surface it is `2*pi*chi`
+    // whatever the tessellation and whichever dual area, so the Gauss-Bonnet
+    // invariant is checkable from Python and not only from a gtest. See
+    // operations/curvature.hpp.
+    m.def(
+        "compute_curvature",
+        [](py::object pymesh, bool mean, bool gaussian, const std::string& dual_area,
+           bool include_boundary, bool record_area, bool record_principal,
+           const std::string& region) {
+            meshioplusplus_py::PyMeshRefs refs;
+            meshioplusplus::Mesh cpp = meshioplusplus_py::py_to_mesh(
+                pymesh, refs, /*lenient_field_data=*/false, /*allow_ragged=*/true);
+            meshioplusplus::CurvatureOptions options;
+            options.mMean = mean;
+            options.mGaussian = gaussian;
+            options.mDualArea = meshioplusplus::curvature_dual_area_from_name(dual_area);
+            options.mIncludeBoundary = include_boundary;
+            options.mRecordArea = record_area;
+            options.mRecordPrincipal = record_principal;
+            options.mRegion = region;
+            meshioplusplus::CurvatureResult r = meshioplusplus::compute_curvature(cpp, options);
+            py::dict out;
+            out["mesh"] = meshioplusplus_py::mesh_to_py(std::move(r.mMesh));
+            out["num_boundary"] = r.mNumBoundary;
+            out["num_isolated"] = r.mNumIsolated;
+            out["num_degenerate"] = r.mNumDegenerate;
+            out["total_angle_defect"] = r.mTotalAngleDefect;
+            py::dict q;
+            q["boundary_edges"] = r.mQuality.mBoundaryEdges;
+            q["non_manifold_edges"] = r.mQuality.mNonManifoldEdges;
+            q["inconsistent_pairs"] = r.mQuality.mInconsistentPairs;
+            q["degenerate_triangles"] = r.mQuality.mDegenerateTriangles;
+            q["watertight"] = r.mQuality.mWatertight;
+            out["quality"] = q;
+            return out;
+        },
+        py::arg("mesh"), py::arg("mean") = true, py::arg("gaussian") = true,
+        py::arg("dual_area") = "mixed-voronoi", py::arg("include_boundary") = false,
+        py::arg("record_area") = false, py::arg("record_principal") = false,
+        py::arg("region") = "");
+
     m.def(
         "hessian",
         [](py::object pymesh, const std::string& array, const std::string& method,

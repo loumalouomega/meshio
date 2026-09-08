@@ -42,6 +42,7 @@
 #include "meshioplusplus/operations/agglomerate.hpp"
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
+#include "meshioplusplus/operations/curvature.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/data_calc.hpp"
@@ -249,6 +250,9 @@ const std::vector<PipeOpSpec>& pipe_op_table() {
         {"Section", {"Point", "Normal", "RecordParentIds"}},  // alias of Slice
         {"Gradient", {"Array", "Operator", "Method", "Location", "Output", "Component"}},
         {"Hessian", {"Array", "Method", "Location", "Output"}},
+        {"Curvature",
+         {"Mean", "Gaussian", "DualArea", "IncludeBoundary", "RecordArea",
+          "RecordPrincipal", "Region"}},
         {"EstimateError", {"Array", "Method", "Marking", "MarkingValue", "Output", "Marked"}},
         {"Remesh",
          {"NumClusters", "Subdivide", "SubsampleRatio", "MaxSubdivide", "MaxIterations",
@@ -678,6 +682,33 @@ Mesh apply_pipeline_step(Mesh mesh, const PipelineStep& rStep, PipelineReport& r
             rReport.mWarnings.push_back("hessian: " + std::to_string(hr.mNumSkipped) +
                                         " cell(s) could not be evaluated and are NaN");
         return std::move(hr.mMesh);
+    }
+    if (op == "Curvature") {
+        // A pure data step: geometry is untouched, so the pipeline carries the
+        // mesh straight through with the curvature arrays attached.
+        CurvatureOptions opts;
+        opts.mMean = pipe_flag(rStep, "Mean", true);
+        opts.mGaussian = pipe_flag(rStep, "Gaussian", true);
+        opts.mDualArea = curvature_dual_area_from_name(pipe_text(rStep, "DualArea", "mixed-voronoi"));
+        opts.mIncludeBoundary = pipe_flag(rStep, "IncludeBoundary", false);
+        opts.mRecordArea = pipe_flag(rStep, "RecordArea", false);
+        opts.mRecordPrincipal = pipe_flag(rStep, "RecordPrincipal", false);
+        opts.mRegion = pipe_text(rStep, "Region", "");
+        CurvatureResult cr = compute_curvature(mesh, opts);
+        pipe_push_step(rReport, rStep,
+                       {{"NumBoundary", static_cast<double>(cr.mNumBoundary)},
+                        {"NumIsolated", static_cast<double>(cr.mNumIsolated)},
+                        {"NumDegenerate", static_cast<double>(cr.mNumDegenerate)},
+                        {"TotalAngleDefect", cr.mTotalAngleDefect}});
+        // H's sign comes from the surface's own winding, so a mesh whose facets
+        // disagree about which side is out yields sign-flipped patches with no
+        // error raised. Say so rather than letting it pass silently.
+        if (cr.mQuality.mInconsistentPairs > 0)
+            rReport.mWarnings.push_back(
+                "curvature: " + std::to_string(cr.mQuality.mInconsistentPairs) +
+                " edge pair(s) wind the same way, so the sign of 'curvature:mean' is not "
+                "trustworthy");
+        return std::move(cr.mMesh);
     }
     if (op == "EstimateError") {
         // A pure data step: geometry is untouched, so the pipeline carries the

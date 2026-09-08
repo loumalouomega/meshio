@@ -62,6 +62,7 @@
 #include "meshioplusplus/ndarray.hpp"
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
+#include "meshioplusplus/operations/curvature.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/data_calc.hpp"
@@ -4264,6 +4265,57 @@ mio_mesh* mio_distance_to_surface(const mio_mesh* query, const mio_mesh* surface
         if (num_banded)
             *num_banded = r.mNumBanded;
         capi_fill_quality(r.mQuality, quality);
+        return new mio_mesh{std::move(r.mMesh)};
+    });
+}
+
+static_assert(sizeof(mio_curvature_opts) == 80,
+              "mio_curvature_opts grew outside its reserved tail");
+static_assert(sizeof(mio_curvature_report) == 136,
+              "mio_curvature_report grew outside its reserved tail");
+
+void mio_curvature_opts_init(mio_curvature_opts* opts) {
+    if (!opts)
+        return;
+    *opts = mio_curvature_opts{};  // value-initialized: every opt-in off
+    opts->mean = 1;
+    opts->gaussian = 1;
+    opts->dual_area = MIO_CURVATURE_MIXED_VORONOI;
+}
+
+mio_mesh* mio_compute_curvature(const mio_mesh* mesh, const mio_curvature_opts* opts,
+                                mio_curvature_report* report) {
+    return guarded_ptr(static_cast<mio_mesh*>(nullptr), [&]() -> mio_mesh* {
+        if (!mesh)
+            throw meshioplusplus::ReadError("meshio++: mesh is NULL");
+        meshioplusplus::CurvatureOptions options;
+        if (opts) {
+            options.mMean = opts->mean != 0;
+            options.mGaussian = opts->gaussian != 0;
+            if (opts->dual_area != MIO_CURVATURE_MIXED_VORONOI &&
+                opts->dual_area != MIO_CURVATURE_BARYCENTRIC)
+                throw std::invalid_argument(
+                    "meshio++: curvature: dual_area must be MIO_CURVATURE_MIXED_VORONOI or "
+                    "MIO_CURVATURE_BARYCENTRIC");
+            options.mDualArea = opts->dual_area == MIO_CURVATURE_BARYCENTRIC
+                                    ? meshioplusplus::CurvatureDualArea::Barycentric
+                                    : meshioplusplus::CurvatureDualArea::MixedVoronoi;
+            options.mIncludeBoundary = opts->include_boundary != 0;
+            options.mRecordArea = opts->record_area != 0;
+            options.mRecordPrincipal = opts->record_principal != 0;
+            if (opts->region)
+                options.mRegion = opts->region;
+        }
+        meshioplusplus::CurvatureResult r =
+            meshioplusplus::compute_curvature(mesh->mMesh, options);
+        if (report) {
+            *report = mio_curvature_report{};
+            capi_fill_quality(r.mQuality, &report->quality);
+            report->num_boundary = r.mNumBoundary;
+            report->num_isolated = r.mNumIsolated;
+            report->num_degenerate = r.mNumDegenerate;
+            report->total_angle_defect = r.mTotalAngleDefect;
+        }
         return new mio_mesh{std::move(r.mMesh)};
     });
 }

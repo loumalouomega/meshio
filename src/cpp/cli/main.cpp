@@ -91,6 +91,7 @@
 #include "meshioplusplus/operations/transform.hpp"
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
+#include "meshioplusplus/operations/curvature.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/split.hpp"
 #include "meshioplusplus/operations/stats.hpp"
@@ -426,6 +427,7 @@ void print_usage(std::ostream& os) {
           "                            --codec zlib|lz4|zstd for vti/vtu/vtp\n"
           "  decompress              Decompress a mesh file (in place)\n"
           "  quality (q)             Print mesh quality metrics\n"
+          "  curvature               Per-vertex mean/Gaussian curvature of a surface\n"
           "  extract-surface (surface)  Extract the boundary surface/edges\n"
           "  reorder                 Renumber nodes/elements (RCM / Morton / Hilbert)\n"
           "  diff                    Compare two meshes (nonzero exit if different)\n"
@@ -1055,6 +1057,63 @@ int cmd_quality(const std::vector<std::string>& rArgs) {
     std::string output = opt_value(p, "output");
     if (!output.empty())
         write_mesh_cli(output, meshioplusplus::attach_quality(mesh), "");
+    return 0;
+}
+
+int cmd_curvature(const std::vector<std::string>& rArgs) {
+    auto p = cli_parse(rArgs, {
+                                  {"input-format", {"-i"}, true},
+                                  {"output-format", {"-o"}, true},
+                                  {"no-mean", {}, false},
+                                  {"no-gaussian", {}, false},
+                                  {"dual-area", {}, true},
+                                  {"include-boundary", {}, false},
+                                  {"record-area", {}, false},
+                                  {"record-principal", {}, false},
+                                  {"region", {}, true},
+                                  {"quiet", {"-q"}, false},
+                              });
+    if (p.positionals.size() != 2)
+        throw std::runtime_error("curvature requires exactly INFILE and OUTFILE");
+    Mesh mesh = read_mesh_cli(p.positionals[0], opt_value(p, "input-format"));
+
+    meshioplusplus::CurvatureOptions options;
+    options.mMean = !has_flag(p, "no-mean");
+    options.mGaussian = !has_flag(p, "no-gaussian");
+    const std::string dual = opt_value(p, "dual-area");
+    options.mDualArea =
+        meshioplusplus::curvature_dual_area_from_name(dual.empty() ? "mixed-voronoi" : dual);
+    options.mIncludeBoundary = has_flag(p, "include-boundary");
+    options.mRecordArea = has_flag(p, "record-area");
+    options.mRecordPrincipal = has_flag(p, "record-principal");
+    options.mRegion = opt_value(p, "region");
+
+    meshioplusplus::CurvatureResult r = meshioplusplus::compute_curvature(mesh, options);
+
+    if (!has_flag(p, "quiet")) {
+        std::cout << "curvature ("
+                  << meshioplusplus::curvature_dual_area_name(options.mDualArea) << ")\n";
+        // The Gauss-Bonnet oracle, printed beside its expected value: on a
+        // closed surface the defects sum to 2*pi*chi whatever the
+        // tessellation, so a reader can check the result without knowing the
+        // estimator.
+        std::cout << "  total angle defect:       " << std::fixed << std::setprecision(6)
+                  << r.mTotalAngleDefect << "   (4*pi = " << (4.0 * 3.14159265358979323846)
+                  << " for a closed genus-0 surface)\n";
+        std::cout << "  boundary vertices (NaN):  " << r.mNumBoundary << "\n";
+        std::cout << "  isolated vertices (NaN):  " << r.mNumIsolated << "\n";
+        std::cout << "  degenerate triangles:     " << r.mNumDegenerate << "\n";
+        std::cout << "  surface: ";
+        if (r.mQuality.mWatertight)
+            std::cout << "watertight\n";
+        else
+            std::cout << r.mQuality.mBoundaryEdges << " boundary / "
+                      << r.mQuality.mNonManifoldEdges << " non-manifold / "
+                      << r.mQuality.mInconsistentPairs << " inconsistent edge(s)\n";
+        std::cout.unsetf(std::ios::floatfield);
+    }
+
+    write_mesh_cli(p.positionals[1], r.mMesh, opt_value(p, "output-format"));
     return 0;
 }
 
@@ -3264,6 +3323,8 @@ int main(int argc, char** argv) {
             return cmd_decompress(rest);
         if (cmd == "quality" || cmd == "q")
             return cmd_quality(rest);
+        if (cmd == "curvature")
+            return cmd_curvature(rest);
         if (cmd == "extract-surface" || cmd == "surface")
             return cmd_extract_surface(rest);
         if (cmd == "reorder")

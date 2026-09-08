@@ -960,6 +960,36 @@ step('remeshVolume is reachable as a convertSurfaceOps pipeline step', () => {
     assert.ok(rendered.cells[0].data.length > 0);
 });
 
+step('computeCurvature satisfies Gauss-Bonnet on a closed surface', () => {
+    // A cube's boundary skin: closed, consistently wound, so the angle
+    // defects sum to 2*pi*chi = 4*pi exactly, whatever the tessellation.
+    const skin = m.extractSurface(cube);
+    const out = m.computeCurvature(skin, true, true, 'mixed-voronoi', false, true, true, '');
+    assert.ok(Math.abs(out.totalAngleDefect - 4 * Math.PI) < 1e-9);
+    assert.equal(out.numBoundary, 0);
+    assert.equal(out.numIsolated, 0);
+    assert.equal(out.numDegenerate, 0);
+    assert.equal(out.quality.watertight, true);
+    assert.equal(out.quality.inconsistentPairs, 0);
+    assert.equal(out.mesh.points.length, skin.points.length); // a pure data step
+    // Barycentric gives the same defect: it changes the dual area, and the
+    // defect never touches it.
+    const bary = m.computeCurvature(skin, true, true, 'barycentric');
+    assert.equal(bary.totalAngleDefect, out.totalAngleDefect);
+    // An unknown dual area is refused by name, not silently defaulted.
+    assert.throws(() => m.computeCurvature(skin, true, true, 'nope'));
+});
+
+step('computeCurvature is reachable as a convertSurfaceOps pipeline step', () => {
+    const skin = m.extractSurface(cube);
+    m.writeMesh('/curv.vtu', skin);
+    const out = m.convertSurfaceOps('/curv.vtu', '/curv.vtp', [
+        { op: 'curvature', recordPrincipal: true },
+    ]);
+    assert.equal(out.steps[0].op, 'curvature');
+    assert.ok(Math.abs(out.steps[0].totalAngleDefect - 4 * Math.PI) < 1e-9);
+});
+
 step('optimizeVolume: ODT-remeshes a tetrahedral mesh', () => {
     // A tetra mesh (simplexified hex cube). optimizeVolume relocates vertices
     // and flips connectivity; the boundary is preserved and no cell inverts.
@@ -1675,6 +1705,7 @@ step('every binding is reachable through the wrapper', () => {
         'sampleDistance',
         'distanceToSurface',
         'computeSdf',
+        'computeCurvature',
         'stats',
         'meshBackend',
         'hasCgnslib',

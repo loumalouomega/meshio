@@ -99,6 +99,33 @@ module meshioplusplus
         integer(c_int64_t) :: reserved(4) = 0
     end type
 
+    !> Interop mirror of C `mio_curvature_opts`. Field order and types are ABI
+    !> and must match bindings/c/include/meshioplusplus/meshioplusplus.h
+    !> exactly; `reserved` is padding for additive growth and must stay zero.
+    !> The defaults here mirror `mio_curvature_opts_init`, which is called
+    !> anyway -- an all-zero struct is NOT the default, since `mean` and
+    !> `gaussian` are on.
+    type, bind(c) :: mio_curvature_opts_t
+        type(c_ptr) :: region = c_null_ptr
+        integer(c_int32_t) :: mean = 1
+        integer(c_int32_t) :: gaussian = 1
+        integer(c_int32_t) :: dual_area = 0
+        integer(c_int32_t) :: include_boundary = 0
+        integer(c_int32_t) :: record_area = 0
+        integer(c_int32_t) :: record_principal = 0
+        integer(c_int64_t) :: reserved(6) = 0
+    end type
+
+    !> Interop mirror of C `mio_curvature_report`. Field order/types are ABI.
+    type, bind(c) :: mio_curvature_report_t
+        type(mio_surface_quality) :: quality
+        integer(c_int64_t) :: num_boundary = 0
+        integer(c_int64_t) :: num_isolated = 0
+        integer(c_int64_t) :: num_degenerate = 0
+        real(c_double) :: total_angle_defect = 0.0_c_double
+        integer(c_int64_t) :: reserved(4) = 0
+    end type
+
     !> Interop mirror of C `mio_sdf_opts`. Field order and types are ABI and
     !> must match bindings/c/include/meshioplusplus/meshioplusplus.h exactly;
     !> `reserved` is padding for additive growth and must stay zero.
@@ -449,6 +476,7 @@ module meshioplusplus
         procedure :: hessian => mesh_hessian
         procedure :: estimate_error => mesh_estimate_error
         procedure :: remesh => mesh_remesh
+        procedure :: curvature => mesh_curvature
         procedure :: remesh_volume => mesh_remesh_volume
         procedure :: split => mesh_split
         procedure :: convert_cells => mesh_convert_cells
@@ -1156,6 +1184,20 @@ module meshioplusplus
             import :: mio_remesh_opts_t
             type(mio_remesh_opts_t), intent(out) :: opts
         end subroutine
+
+        subroutine c_mio_curvature_opts_init(opts) bind(c, name="mio_curvature_opts_init")
+            import :: mio_curvature_opts_t
+            type(mio_curvature_opts_t), intent(out) :: opts
+        end subroutine
+
+        function c_mio_compute_curvature(h, opts, report) &
+                bind(c, name="mio_compute_curvature") result(r)
+            import :: c_ptr, mio_curvature_opts_t, mio_curvature_report_t
+            type(c_ptr), value :: h
+            type(mio_curvature_opts_t), intent(in) :: opts
+            type(mio_curvature_report_t), intent(out) :: report
+            type(c_ptr) :: r
+        end function
 
         function c_mio_remesh_ex(h, opts, report) bind(c, name="mio_remesh_ex") result(r)
             import :: c_ptr, mio_remesh_opts_t, mio_remesh_report_t
@@ -3416,6 +3458,103 @@ contains
     !> Goes through mio_remesh_ex/mio_remesh_opts rather than the flat
     !> mio_remesh -- the mio_refine_ex precedent, needed because mio_remesh
     !> is a flat C function with no room to grow (it already changed once).
+    !> Per-vertex mean and Gaussian curvature of this surface, by the angle
+    !> defect (K) and the cotangent Laplace-Beltrami operator (H) -- the
+    !> signed distance's companion as a node feature.
+    !>
+    !> Writes `curvature:mean` and `curvature:gaussian` as point data,
+    !> optionally `curvature:area` and the (n, 2) `curvature:principal`.
+    !> Geometry, connectivity and existing data are carried through unchanged.
+    !>
+    !> `total_angle_defect` is the oracle: on a CLOSED surface it is
+    !> `2*pi*chi` exactly -- `4*pi` for anything sphere-like -- whatever the
+    !> tessellation and whichever `dual_area`, so a value that is not that
+    !> means the input is not closed or the result is not sane.
+    !>
+    !> `H` is orientation-dependent and `K` is not, so check
+    !> `inconsistent_pairs` before trusting a sign: a nonzero count means
+    !> facets disagree about which side is out. This never repairs its input.
+    function mesh_curvature(self, mean, gaussian, dual_area, include_boundary, &
+                            record_area, record_principal, region, num_boundary, &
+                            num_isolated, num_degenerate, total_angle_defect, &
+                            boundary_edges, non_manifold_edges, inconsistent_pairs, &
+                            degenerate_triangles, watertight, stat, errmsg) result(out)
+        class(mio_mesh), intent(in) :: self
+        logical, intent(in), optional :: mean, gaussian, include_boundary
+        logical, intent(in), optional :: record_area, record_principal
+        character(*), intent(in), optional :: dual_area, region
+        integer(int64), intent(out), optional :: num_boundary, num_isolated, num_degenerate
+        real(real64), intent(out), optional :: total_angle_defect
+        integer(int64), intent(out), optional :: boundary_edges, non_manifold_edges
+        integer(int64), intent(out), optional :: inconsistent_pairs, degenerate_triangles
+        logical, intent(out), optional :: watertight
+        integer, intent(out), optional :: stat
+        character(:), allocatable, intent(out), optional :: errmsg
+        type(mio_mesh) :: out
+        type(c_ptr) :: res
+        type(mio_curvature_opts_t) :: opts
+        type(mio_curvature_report_t) :: report
+        ! NUL-terminated copy must outlive the call, so it is held here rather
+        ! than built inline; c_loc needs it contiguous and TARGET -- the
+        ! region_buf idiom mesh_refine and mesh_remesh already use.
+        character(kind=c_char, len=STRBUF_LEN), target :: region_buf
+
+        call c_mio_curvature_opts_init(opts)
+        if (present(mean)) then
+            if (.not. mean) opts%mean = 0
+        end if
+        if (present(gaussian)) then
+            if (.not. gaussian) opts%gaussian = 0
+        end if
+        if (present(dual_area)) then
+            if (trim(dual_area) == 'barycentric') then
+                opts%dual_area = 1
+            else if (trim(dual_area) == 'mixed-voronoi') then
+                opts%dual_area = 0
+            else
+                call handle_failure('curvature', &
+                    "meshio++: curvature: unknown dual area '"//trim(dual_area)// &
+                    "' (expected 'mixed-voronoi' or 'barycentric')", stat, errmsg)
+                return
+            end if
+        end if
+        if (present(include_boundary)) then
+            if (include_boundary) opts%include_boundary = 1
+        end if
+        if (present(record_area)) then
+            if (record_area) opts%record_area = 1
+        end if
+        if (present(record_principal)) then
+            if (record_principal) opts%record_principal = 1
+        end if
+        if (present(region)) then
+            region_buf = trim(region)//c_null_char
+            opts%region = c_loc(region_buf(1:1))
+        end if
+
+        res = c_mio_compute_curvature(self%handle, opts, report)
+        if (.not. c_associated(res)) then
+            call handle_failure('curvature', mio_error_message(), stat, errmsg)
+            return
+        end if
+        out%handle = res
+        if (present(num_boundary)) num_boundary = int(report%num_boundary, int64)
+        if (present(num_isolated)) num_isolated = int(report%num_isolated, int64)
+        if (present(num_degenerate)) num_degenerate = int(report%num_degenerate, int64)
+        if (present(total_angle_defect)) &
+            total_angle_defect = real(report%total_angle_defect, real64)
+        if (present(boundary_edges)) &
+            boundary_edges = int(report%quality%boundary_edges, int64)
+        if (present(non_manifold_edges)) &
+            non_manifold_edges = int(report%quality%non_manifold_edges, int64)
+        if (present(inconsistent_pairs)) &
+            inconsistent_pairs = int(report%quality%inconsistent_pairs, int64)
+        if (present(degenerate_triangles)) &
+            degenerate_triangles = int(report%quality%degenerate_triangles, int64)
+        if (present(watertight)) watertight = (report%quality%watertight /= 0)
+        call clear_status(stat, errmsg)
+    end function
+
     function mesh_remesh(self, num_clusters, subdivide, subsample_ratio, max_subdivide, &
                          max_iterations, max_repair_passes, metric, gradation, &
                          preserve_boundary, max_anisotropy, num_iterations, subdivide_applied, &

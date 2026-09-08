@@ -72,6 +72,7 @@
 #include "meshioplusplus/operations/remesh.hpp"
 #include "meshioplusplus/operations/remesh_volume.hpp"
 #include "meshioplusplus/operations/optimize_volume.hpp"
+#include "meshioplusplus/operations/curvature.hpp"
 #include "meshioplusplus/operations/smooth.hpp"
 #include "meshioplusplus/operations/voxelize.hpp"
 #include "meshioplusplus/detail/grid_lattice.hpp"
@@ -206,6 +207,13 @@ MIO_ABI_LAYOUT(meshioplusplus::RemeshVolumeOptions, 224, 8);
 // RefineOptions/RemeshOptions "pin in advance" lesson. OptimizeVolumeResult is
 // deliberately NOT pinned, embedding a `Mesh` like every other *Result.
 MIO_ABI_LAYOUT(meshioplusplus::OptimizeVolumeOptions, 40, 8);
+
+// CurvatureOptions is passed by const-ref through the exported
+// `compute_curvature()`, and is pinned from the release that introduces it --
+// the RefineOptions/RemeshOptions "pin in advance" lesson (a struct that goes
+// unpinned "looks free" to grow, then does). CurvatureResult is deliberately
+// NOT pinned, embedding a `Mesh` like every other *Result.
+MIO_ABI_LAYOUT(meshioplusplus::CurvatureOptions, 40, 8);
 
 // SmoothOptions is passed by const-ref through the exported `smooth()`, and
 // is pinned here for the FIRST time -- not because it grew a member (it

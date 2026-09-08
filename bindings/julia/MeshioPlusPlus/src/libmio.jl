@@ -322,6 +322,33 @@ struct _CRemeshOpts
     reserved::NTuple{4,Int64}
 end
 
+"""
+Mirror of C `mio_curvature_opts`. Field order, types and the trailing
+`reserved` padding are ABI: they must match `meshioplusplus.h` exactly. Always
+build one through [`compute_curvature`](@ref) rather than by hand -- `mean` and
+`gaussian` default ON, so an all-zero struct is NOT the default.
+"""
+struct _CCurvatureOpts
+    region::Cstring
+    mean::Int32
+    gaussian::Int32
+    dual_area::Int32
+    include_boundary::Int32
+    record_area::Int32
+    record_principal::Int32
+    reserved::NTuple{6,Int64}
+end
+
+"""Mirror of C `mio_curvature_report`."""
+struct _CCurvatureReport
+    quality::_CSurfaceQuality
+    num_boundary::Int64
+    num_isolated::Int64
+    num_degenerate::Int64
+    total_angle_defect::Cdouble
+    reserved::NTuple{4,Int64}
+end
+
 """Mirror of C `mio_remesh_report`."""
 struct _CRemeshReport
     num_clusters::Int64
@@ -387,6 +414,10 @@ function _check_abi_layout()
     sizeof(_CComputeSdfOpts) == 232 ||
         error("meshio++: mio_compute_sdf_opts layout mismatch " *
               "($(sizeof(_CComputeSdfOpts)) bytes)")
+    sizeof(_CCurvatureOpts) == 80 ||
+        error("meshio++: mio_curvature_opts layout mismatch ($(sizeof(_CCurvatureOpts)) bytes)")
+    sizeof(_CCurvatureReport) == 136 ||
+        error("meshio++: mio_curvature_report layout mismatch ($(sizeof(_CCurvatureReport)) bytes)")
     sizeof(_CRemeshOpts) == 120 ||
         error("meshio++: mio_remesh_opts layout mismatch ($(sizeof(_CRemeshOpts)) bytes)")
     sizeof(_CRemeshReport) == 72 ||

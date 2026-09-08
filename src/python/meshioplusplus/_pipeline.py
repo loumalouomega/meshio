@@ -30,6 +30,7 @@ from ._agglomerate import agglomerate
 from ._clean import clean
 from ._convert_cells import convert_cells
 from ._crop import crop
+from ._curvature import compute_curvature
 from ._data_average import cell_data_to_point_data, point_data_to_cell_data
 from ._data_calc import data_calc
 from ._data_condition import data_condition
@@ -112,6 +113,15 @@ _OP_TABLE = {
     "Section": ("Point", "Normal", "RecordParentIds"),  # alias of Slice
     "Gradient": ("Array", "Operator", "Method", "Location", "Output", "Component"),
     "Hessian": ("Array", "Method", "Location", "Output"),
+    "Curvature": (
+        "Mean",
+        "Gaussian",
+        "DualArea",
+        "IncludeBoundary",
+        "RecordArea",
+        "RecordPrincipal",
+        "Region",
+    ),
     "EstimateError": ("Array", "Method", "Marking", "MarkingValue", "Output", "Marked"),
     "Remesh": (
         "NumClusters",
@@ -549,6 +559,31 @@ def _apply_step(mesh, step, steps, warnings):
             warnings.append(
                 f"hessian: {report['num_skipped']} cell(s) could not be "
                 "evaluated and are NaN"
+            )
+    elif op == "Curvature":
+        mesh, report = compute_curvature(
+            mesh,
+            mean=_flag(step, "Mean", True),
+            gaussian=_flag(step, "Gaussian", True),
+            dual_area=_text(step, "DualArea", "mixed-voronoi"),
+            include_boundary=_flag(step, "IncludeBoundary", False),
+            record_area=_flag(step, "RecordArea", False),
+            record_principal=_flag(step, "RecordPrincipal", False),
+            region=_text(step, "Region", ""),
+            return_report=True,
+        )
+        entry["NumBoundary"] = report["num_boundary"]
+        entry["NumIsolated"] = report["num_isolated"]
+        entry["NumDegenerate"] = report["num_degenerate"]
+        entry["TotalAngleDefect"] = report["total_angle_defect"]
+        # H's sign comes from the surface's own winding, so a mesh whose facets
+        # disagree about which side is out yields sign-flipped patches with no
+        # error raised. Say so rather than letting it pass silently.
+        if report["quality"]["inconsistent_pairs"] > 0:
+            warnings.append(
+                f"curvature: {report['quality']['inconsistent_pairs']} edge "
+                "pair(s) wind the same way, so the sign of 'curvature:mean' is "
+                "not trustworthy"
             )
     elif op == "EstimateError":
         mesh, report = estimate_error(

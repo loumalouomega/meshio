@@ -3536,3 +3536,79 @@ TEST(CApi, ProvenanceReadBackIsHonestAboutAForeignFile) {
     std::error_code ec;
     std::filesystem::remove(path, ec);
 }
+
+namespace {
+
+/// A regular octahedron: the smallest closed, consistently wound triangle
+/// surface, so Gauss-Bonnet applies and every edge is used exactly twice.
+mio_mesh* capi_curv_octahedron() {
+    const std::vector<double> pts = {1.0,  0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0,  0.0,
+                                     0.0, -1.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0, -1.0};
+    const std::vector<std::int64_t> conn = {0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4,
+                                            2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5};
+    mio_mesh* m = mio_mesh_create();
+    EXPECT_EQ(mio_mesh_set_points(m, MIO_FLOAT64, 6, 3, pts.data()), MIO_OK);
+    EXPECT_EQ(mio_mesh_add_cell_block(m, "triangle", 8, 3, MIO_INT64, conn.data()), MIO_OK);
+    return m;
+}
+
+}  // namespace
+
+TEST(CApi, ComputeCurvatureSatisfiesGaussBonnet) {
+    // The tessellation-independent oracle: on a closed surface the angle
+    // defects sum to 2*pi*chi, which is 4*pi for anything sphere-like. It is
+    // reported through the C ABI precisely so a flat-binding consumer can check
+    // a result without reimplementing the estimator.
+    mio_mesh* m = capi_curv_octahedron();
+
+    mio_curvature_opts opts;
+    mio_curvature_opts_init(&opts);
+    EXPECT_EQ(opts.mean, 1);      // ON by default -- an all-zero struct is NOT the default
+    EXPECT_EQ(opts.gaussian, 1);
+    EXPECT_EQ(opts.dual_area, MIO_CURVATURE_MIXED_VORONOI);
+    opts.record_area = 1;
+    opts.record_principal = 1;
+
+    mio_curvature_report report;
+    mio_mesh* out = mio_compute_curvature(m, &opts, &report);
+    ASSERT_NE(out, nullptr) << mio_last_error();
+    EXPECT_NEAR(report.total_angle_defect, 4.0 * 3.14159265358979323846, 1e-12);
+    EXPECT_EQ(report.num_boundary, 0);
+    EXPECT_EQ(report.num_isolated, 0);
+    EXPECT_EQ(report.num_degenerate, 0);
+    EXPECT_NE(report.quality.watertight, 0);
+    EXPECT_EQ(report.quality.inconsistent_pairs, 0);
+    EXPECT_EQ(mio_mesh_num_points(out), 6);  // a pure data step
+    mio_mesh_free(out);
+
+    // NULL options means every mio_curvature_opts_init default, and a NULL
+    // report is simply not written.
+    mio_mesh* plain = mio_compute_curvature(m, nullptr, nullptr);
+    ASSERT_NE(plain, nullptr) << mio_last_error();
+    mio_mesh_free(plain);
+
+    // Barycentric gives the same defect: it changes the dual area, and the
+    // defect never touches it.
+    opts.dual_area = MIO_CURVATURE_BARYCENTRIC;
+    mio_curvature_report bary;
+    mio_mesh* out2 = mio_compute_curvature(m, &opts, &bary);
+    ASSERT_NE(out2, nullptr) << mio_last_error();
+    EXPECT_EQ(bary.total_angle_defect, report.total_angle_defect);
+    mio_mesh_free(out2);
+
+    // An out-of-range dual area is refused rather than silently clamped.
+    opts.dual_area = 7;
+    EXPECT_EQ(mio_compute_curvature(m, &opts, nullptr), nullptr);
+    mio_mesh_free(m);
+
+    // A volume mesh is refused by name; no exception crosses the ABI.
+    const std::vector<double> tp = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const std::vector<std::int64_t> tc = {0, 1, 2, 3};
+    mio_mesh* vol = mio_mesh_create();
+    ASSERT_EQ(mio_mesh_set_points(vol, MIO_FLOAT64, 4, 3, tp.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_cell_block(vol, "tetra", 1, 4, MIO_INT64, tc.data()), MIO_OK);
+    EXPECT_EQ(mio_compute_curvature(vol, nullptr, nullptr), nullptr);
+    EXPECT_NE(std::string(mio_last_error()).find("extract_surface"), std::string::npos);
+    mio_mesh_free(vol);
+}

@@ -9,6 +9,8 @@
 
 #include "mio_r.h"
 
+static SEXP quality_list(const mio_surface_quality *q); /* defined below; used earlier */
+
 #include <string.h>
 
 /* --- surface / skin / quality ------------------------------------------- */
@@ -305,6 +307,46 @@ SEXP R_mio_remesh(SEXP mesh, SEXP num_clusters, SEXP subdivide, SEXP subsample_r
     const char *names[] = {"mesh", "num_clusters", "num_iterations", "subdivide_applied",
                            "num_isolated_clusters", "num_non_manifold_vertices"};
     SEXP values[] = {mo, nc, ni, sa, iso, nm};
+    SEXP res = PROTECT(mio_r_named_list(6, names, values));
+    UNPROTECT(7);
+    return res;
+}
+
+SEXP R_mio_compute_curvature(SEXP mesh, SEXP mean, SEXP gaussian, SEXP dual_area,
+                             SEXP include_boundary, SEXP record_area, SEXP record_principal,
+                             SEXP region) {
+    mio_curvature_opts opts;
+    mio_curvature_report report;
+    mio_mesh *out;
+
+    mio_curvature_opts_init(&opts);
+    opts.mean = mio_r_bool(mean, "mean") ? 1 : 0;
+    opts.gaussian = mio_r_bool(gaussian, "gaussian") ? 1 : 0;
+    const char *da = mio_r_opt_string(dual_area);
+    if (da != NULL && strcmp(da, "barycentric") == 0) {
+        opts.dual_area = MIO_CURVATURE_BARYCENTRIC;
+    } else if (da != NULL && strcmp(da, "mixed-voronoi") != 0) {
+        Rf_error("meshio++: curvature: unknown dual area '%s' "
+                 "(expected 'mixed-voronoi' or 'barycentric')", da);
+    }
+    opts.include_boundary = mio_r_bool(include_boundary, "include_boundary") ? 1 : 0;
+    opts.record_area = mio_r_bool(record_area, "record_area") ? 1 : 0;
+    opts.record_principal = mio_r_bool(record_principal, "record_principal") ? 1 : 0;
+    opts.region = mio_r_opt_string(region);
+
+    out = mio_compute_curvature(mio_r_mesh(mesh), &opts, &report);
+    if (out == NULL) mio_r_fail("curvature");
+    SEXP mo = PROTECT(mio_r_wrap_mesh(out));
+    SEXP q = PROTECT(quality_list(&report.quality));
+    /* R has no native int64, so the counters come back as doubles -- the
+       mio_gradient wrapper's rule. */
+    SEXP nb = PROTECT(Rf_ScalarReal((double)report.num_boundary));
+    SEXP ni = PROTECT(Rf_ScalarReal((double)report.num_isolated));
+    SEXP nd = PROTECT(Rf_ScalarReal((double)report.num_degenerate));
+    SEXP tad = PROTECT(Rf_ScalarReal(report.total_angle_defect));
+    const char *names[] = {"mesh", "quality", "num_boundary", "num_isolated",
+                           "num_degenerate", "total_angle_defect"};
+    SEXP values[] = {mo, q, nb, ni, nd, tad};
     SEXP res = PROTECT(mio_r_named_list(6, names, values));
     UNPROTECT(7);
     return res;

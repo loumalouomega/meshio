@@ -235,7 +235,7 @@ typedef struct mio_region_info {
  * project(... VERSION ...), so the copies cannot drift.
  */
 #define MIO_VERSION_MAJOR 10
-#define MIO_VERSION_MINOR 36
+#define MIO_VERSION_MINOR 37
 #define MIO_VERSION_PATCH 0
 #define MIO_VERSION (MIO_VERSION_MAJOR * 10000 + MIO_VERSION_MINOR * 100 + MIO_VERSION_PATCH)
 
@@ -2396,6 +2396,80 @@ MIO_API mio_mesh* mio_optimize_volume(const mio_mesh* mesh, int max_iterations, 
                                       int64_t* num_32_flips, int64_t* num_vertices_moved,
                                       int64_t* num_tets, double* min_quality_before,
                                       double* min_quality_after);
+
+/** Which dual area a per-vertex curvature is divided by. */
+typedef enum mio_curvature_dual_area {
+    /** Meyer et al.'s mixed Voronoi area. The default; converges better on an
+     *  irregular tessellation. */
+    MIO_CURVATURE_MIXED_VORONOI = 0,
+    /** A third of each incident triangle's area. Cruder, but branch-free. */
+    MIO_CURVATURE_BARYCENTRIC = 1
+} mio_curvature_dual_area;
+
+/**
+ * Options for mio_compute_curvature.
+ *
+ * ABI NOTE: this struct is part of the installed library's permanent ABI. New
+ * fields may only be appended, replacing `reserved` capacity; never reorder,
+ * resize or repurpose an existing field. Always zero-initialize through
+ * mio_curvature_opts_init() rather than by hand -- `mean` and `gaussian`
+ * default to ON, so an all-zero struct is NOT the default here.
+ *
+ * Ships only this options-struct form: like mio_compute_sdf, a brand-new entry
+ * point has no back-compat flat signature to keep, so there is nothing to grow
+ * out of later the way mio_remesh had to.
+ */
+typedef struct mio_curvature_opts {
+    /** Restrict to this named cell region; NULL or "" takes every surface cell. */
+    const char* region;
+    int32_t mean;             /**< nonzero (the default) attaches curvature:mean */
+    int32_t gaussian;         /**< nonzero (the default) attaches curvature:gaussian */
+    int32_t dual_area;        /**< a mio_curvature_dual_area */
+    int32_t include_boundary; /**< nonzero computes a biased value at boundary vertices */
+    int32_t record_area;      /**< nonzero attaches curvature:area */
+    int32_t record_principal; /**< nonzero attaches curvature:principal, (n, 2) */
+    int64_t reserved[6];      /**< must be zero; room for additive growth */
+} mio_curvature_opts;
+
+/**
+ * Zero-initialize curvature options to their defaults: mean and gaussian ON,
+ * the mixed-Voronoi dual area, every opt-in off and no region restriction.
+ */
+MIO_API void mio_curvature_opts_init(mio_curvature_opts* opts);
+
+/** What mio_compute_curvature computed, and what it found on the way. */
+typedef struct mio_curvature_report {
+    /** The verdict for the INPUT surface. A nonzero `inconsistent_pairs` means
+     *  the SIGN of curvature:mean is not trustworthy -- H is
+     *  orientation-dependent and K is not. This never repairs its input. */
+    mio_surface_quality quality;
+    int64_t num_boundary;   /**< vertices left NaN because they sit on a boundary */
+    int64_t num_isolated;   /**< vertices left NaN because no triangle references them */
+    int64_t num_degenerate; /**< triangles skipped for zero area */
+    /** The sum of every vertex's angle defect. For a CLOSED surface this is
+     *  2*pi*chi exactly -- 4*pi for a sphere -- whatever the tessellation and
+     *  whichever dual area was chosen. The cheapest check that a result is
+     *  sane, and the reason it is reported rather than kept internal. */
+    double total_angle_defect;
+    int64_t reserved[4]; /**< must be zero; room for additive growth */
+} mio_curvature_report;
+
+/**
+ * Per-vertex mean and Gaussian curvature of a surface mesh, by the angle
+ * defect (K) and the cotangent Laplace-Beltrami operator (H).
+ *
+ * Triangles come from the same fan convert_cells(simplexify) uses; a volume or
+ * polyhedron block is refused by name pointing at extract_surface, a
+ * higher-order one pointing at linearize. See doc/curvature.md.
+ *
+ * @param mesh   a surface mesh.
+ * @param opts   options; NULL means every mio_curvature_opts_init() default.
+ * @param report optional out: the counters and the input surface's verdict.
+ * @return the mesh with the requested point_data attached (free with
+ *         mio_mesh_free), or NULL on failure.
+ */
+MIO_API mio_mesh* mio_compute_curvature(const mio_mesh* mesh, const mio_curvature_opts* opts,
+                                        mio_curvature_report* report);
 
 /* ------------------------------------------------------------------------- */
 /* Data operations                                                           */

@@ -1527,6 +1527,43 @@ export interface MeshioPlusPlusModule {
     minQualityAfter: number;
   };
 
+  /**
+   * Per-vertex mean (H) and Gaussian (K) curvature of a surface mesh -- the
+   * signed distance's natural companion as a node feature. K is the angle
+   * defect, H the cotangent Laplace-Beltrami operator. Writes
+   * `curvature:mean`/`curvature:gaussian` point data, optionally
+   * `curvature:area` and `curvature:principal`. `totalAngleDefect` is the
+   * Gauss-Bonnet oracle: `2*pi*chi` exactly for a CLOSED surface (`4*pi` for
+   * anything sphere-like), whatever the tessellation and whichever
+   * `dualArea`. H's sign is orientation-dependent and K's is not, so check
+   * `quality.inconsistentPairs` before trusting a sign. Never repairs its
+   * input. See doc/curvature.md.
+   * @throws {Error} on a non-surface input or an unknown region.
+   */
+  computeCurvature(
+    mesh: Mesh,
+    mean?: boolean,
+    gaussian?: boolean,
+    dualArea?: 'mixed-voronoi' | 'barycentric',
+    includeBoundary?: boolean,
+    recordArea?: boolean,
+    recordPrincipal?: boolean,
+    region?: string,
+  ): {
+    mesh: Mesh;
+    numBoundary: number;
+    numIsolated: number;
+    numDegenerate: number;
+    totalAngleDefect: number;
+    quality: {
+      boundaryEdges: number;
+      nonManifoldEdges: number;
+      inconsistentPairs: number;
+      degenerateTriangles: number;
+      watertight: boolean;
+    };
+  };
+
   /** Partition a mesh into submeshes by type, connected component, or tag. */
   split(mesh: Mesh, by: SplitBy, tagName?: string): { key: string; mesh: Mesh }[];
 

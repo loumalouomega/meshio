@@ -9121,7 +9121,7 @@ inline PointTriangleHit closest_point_on_triangle(const Vec3& rP, const Vec3& rA
 /// Major component of the release version.
 #define MESHIOPLUSPLUS_VERSION_MAJOR 10
 /// Minor component of the release version.
-#define MESHIOPLUSPLUS_VERSION_MINOR 36
+#define MESHIOPLUSPLUS_VERSION_MINOR 37
 /// Patch component of the release version.
 #define MESHIOPLUSPLUS_VERSION_PATCH 0
 
@@ -9131,7 +9131,7 @@ inline PointTriangleHit closest_point_on_triangle(const Vec3& rP, const Vec3& rA
      MESHIOPLUSPLUS_VERSION_PATCH)
 
 /// The release version as a string literal, e.g. `"9.6.0"`.
-#define MESHIOPLUSPLUS_VERSION_STRING "10.36.0"
+#define MESHIOPLUSPLUS_VERSION_STRING "10.37.0"
 
 /// Whether the headers being compiled against are at least `major.minor.patch`.
 #define MESHIOPLUSPLUS_VERSION_AT_LEAST(major, minor, patch) \
@@ -10634,9 +10634,14 @@ struct TriangleSoup {
     std::vector<Vec3> mCorners;
     /// Per triangle, the global (block-major) index of the input cell it came from.
     std::vector<std::int64_t> mSourceCell;
-    /// Per triangle, the three vertex ids in the *welded* numbering below.
+    /// Per triangle, the three vertex ids -- the INPUT MESH's own point ids.
+    /// `build_triangle_soup` does not weld: it copies every mesh point verbatim,
+    /// so `mPoints[i]` is mesh point `i`, index for index, orphans included.
+    /// Two coincident-but-distinct points therefore read as two vertices here,
+    /// which is why an edge between them counts as a boundary edge and why
+    /// `repair` merges points before it looks at orientation or holes.
     std::vector<std::array<std::int64_t, 3>> mVertices;
-    /// Distinct vertex positions, indexed by the ids in `mVertices`.
+    /// Every input point, in the input's own order (see `mVertices`).
     std::vector<Vec3> mPoints;
 
     std::size_t NumTriangles() const { return mSourceCell.size(); }
@@ -10655,9 +10660,6 @@ struct TriangleSoup {
 MESHIOPLUSPLUS_API TriangleSoup build_triangle_soup(const Mesh& rSurface,
                                                     const std::string& rRegion);
 
-/// The four edge defect counts of a soup, and the resulting verdict.
-MESHIOPLUSPLUS_API SurfaceQuality soup_quality(const TriangleSoup& rSoup);
-
 /// An undirected edge, as the sorted pair of its endpoints' vertex ids.
 using SurfaceEdgeKey = std::array<std::int64_t, 2>;
 
@@ -10670,6 +10672,42 @@ struct SurfaceEdgeKeyHash {
         return h;
     }
 };
+
+/**
+ * @brief What one undirected edge of a soup is used by.
+ *
+ * `mUsed` is how many triangles reference the edge and `mForward` how many
+ * traverse it low->high. A consistently wound closed surface has `mUsed == 2`
+ * and `mForward == 1` on every edge: the two triangles walk their shared edge
+ * in opposite directions, which is exactly what "they agree about which side
+ * is out" means. `mUsed == 1` is a boundary edge, `mUsed > 2` non-manifold,
+ * and `mUsed == 2 && mForward != 1` a wound-the-same-way pair.
+ *
+ * `mFirstTriangle` is the lowest-indexed triangle using the edge, which is
+ * what lets a caller walk the face dual without building a second incidence
+ * structure.
+ */
+struct SurfaceEdgeRecord {
+    std::int64_t mUsed = 0;
+    std::int64_t mForward = 0;
+    std::int64_t mFirstTriangle = -1;
+};
+
+/// Every undirected edge of a soup, keyed by its sorted endpoint pair.
+using SurfaceEdgeMap = std::unordered_map<SurfaceEdgeKey, SurfaceEdgeRecord, SurfaceEdgeKeyHash>;
+
+/**
+ * @brief The per-edge use record of a soup.
+ *
+ * `soup_quality` is a fold over this, and it is what a reorientation BFS walks
+ * and what a boundary-loop walk starts from -- so the three cannot disagree
+ * about what a boundary edge is. Hoisted out of `soup_quality`'s body, which
+ * built exactly this map and then discarded it.
+ */
+MESHIOPLUSPLUS_API SurfaceEdgeMap build_surface_edges(const TriangleSoup& rSoup);
+
+/// The four edge defect counts of a soup, and the resulting verdict.
+MESHIOPLUSPLUS_API SurfaceQuality soup_quality(const TriangleSoup& rSoup);
 
 /**
  * @brief A soup prepared for querying: the accelerator plus the normal tables.
@@ -17803,6 +17841,162 @@ MESHIOPLUSPLUS_API CropResult crop_predicate(const Mesh& rMesh, const std::strin
 
 }  // namespace meshioplusplus
 // ===== end src/cpp/include/meshioplusplus/operations/crop.hpp =====
+// ===== begin src/cpp/include/meshioplusplus/operations/curvature.hpp =====
+/**
+ * @file operations/curvature.hpp
+ * @brief Per-vertex mean and Gaussian curvature of a surface, by the standard
+ * discrete estimators: the angle defect for `K` and the cotangent
+ * Laplace-Beltrami operator for `H`.
+ *
+ * These are the estimators the discrete-differential-geometry literature's
+ * convergence results are about, and the ones NVIDIA PhysicsNeMo's own
+ * `gaussian_curvature_vertices`/`mean_curvature_vertices` use -- so the numbers
+ * here are comparable with a model's. Implemented from the published
+ * definitions; no upstream code is read or vendored.
+ *
+ * **Deliberately NOT `remesh`'s estimator.** `remesh.cpp` fits an osculating
+ * paraboloid over each 1-ring to drive `RemeshOptions::mGradation` and the
+ * anisotropic metric. That is a legitimate estimator, but it returns only the
+ * larger-magnitude principal curvature as a magnitude, it runs on remesh's own
+ * subdivided working copy rather than the caller's mesh, and it has no
+ * structural invariant to test against. It is left exactly as it is: this
+ * operation adds a second, independent estimator rather than changing one two
+ * other features depend on.
+ *
+ * **The oracle that makes this testable is Gauss-Bonnet.** For a closed surface
+ * the angle defects sum to `2*pi*chi` -- `4*pi` for a sphere, whatever the
+ * tessellation and whichever dual area is chosen. `CurvatureResult` reports that
+ * sum (`mTotalAngleDefect`) precisely so the invariant is observable from every
+ * binding rather than only from a gtest. Note it is `2*pi*chi` only for a
+ * **closed** surface; on an open one it is that minus the boundary's turning.
+ *
+ * **`H` is orientation-dependent** and `K` is not. The mean curvature's sign
+ * comes from the surface's own winding, so a mesh whose facets disagree about
+ * which side is out yields sign-flipped patches with no error raised. That is
+ * why the result carries the input's `SurfaceQuality`: check
+ * `mQuality.mInconsistentPairs` before trusting a sign, and run
+ * `repair(mesh, {.mFixOrientation = true})` if it is non-zero. This operation
+ * never silently repairs its input.
+ */
+
+// System includes
+#include <cstdint>
+#include <string>
+
+// Project includes
+
+namespace meshioplusplus {
+
+/// Point data: the mean curvature `H`, one Float64 per point.
+inline constexpr const char* kCurvatureMeanName = "curvature:mean";
+/// Point data: the Gaussian curvature `K`, one Float64 per point.
+inline constexpr const char* kCurvatureGaussianName = "curvature:gaussian";
+/// Point data: the dual (vertex) area each curvature was divided by. Opt-in.
+inline constexpr const char* kCurvatureAreaName = "curvature:area";
+/// Point data: the two principal curvatures as `(n, 2)`, `k1 >= k2`. Opt-in.
+inline constexpr const char* kCurvaturePrincipalName = "curvature:principal";
+
+/**
+ * @brief Which dual area a per-vertex curvature is divided by.
+ *
+ * Both partition the surface exactly, so `mTotalAngleDefect` -- and therefore
+ * the Gauss-Bonnet invariant -- is identical under either.
+ */
+enum class CurvatureDualArea : std::uint8_t {
+    /// Meyer et al.'s mixed Voronoi area: the Voronoi cell where the triangle is
+    /// non-obtuse, and a bisected area where it is. Reuses the cotangents the
+    /// mean-curvature pass already computes, so it is nearly free, and it
+    /// converges better on an irregular tessellation. The default.
+    MixedVoronoi = 0,
+    /// A third of each incident triangle's area. Cruder, but **branch-free**,
+    /// which is what makes it bit-exactly reproducible by the numpy twin --
+    /// the same second-mode-for-twinnability argument `SdfPseudonormalWeight`
+    /// already makes.
+    Barycentric = 1,
+};
+
+/**
+ * @brief Parses a dual-area name.
+ * @param rName One of `"mixed-voronoi"`, `"barycentric"` (case-sensitive, as
+ *        elsewhere in the operations layer).
+ * @return The matching enumerator.
+ * @throws std::invalid_argument if the name is not recognised.
+ */
+MESHIOPLUSPLUS_API CurvatureDualArea curvature_dual_area_from_name(const std::string& rName);
+
+/// The spelling `curvature_dual_area_from_name` accepts for `Mode`, so the flat
+/// bindings, both CLIs and the pipeline report a name a caller can pass back.
+MESHIOPLUSPLUS_API const char* curvature_dual_area_name(CurvatureDualArea Mode);
+
+/// What `compute_curvature` should compute and attach.
+struct CurvatureOptions {
+    /// Attach `curvature:mean`.
+    bool mMean = true;
+    /// Attach `curvature:gaussian`.
+    bool mGaussian = true;
+    /// Which dual area to divide by.
+    CurvatureDualArea mDualArea = CurvatureDualArea::MixedVoronoi;
+    /// Compute a value at boundary vertices instead of leaving them NaN.
+    ///
+    /// Off by default, matching upstream: a boundary vertex has no closed
+    /// 1-ring, so both estimators are biased there and the honest answer is
+    /// "not defined". On, `K` uses the geodesic form `pi - sum(theta)` and `H`
+    /// the raw one-sided operator; both are biased and documented as such.
+    /// Isolated vertices are NaN either way -- there is nothing to average.
+    bool mIncludeBoundary = false;
+    /// Also attach `curvature:area`.
+    bool mRecordArea = false;
+    /// Also attach `curvature:principal`, the `(n, 2)` pair `k1 >= k2` recovered
+    /// as `H +- sqrt(H^2 - K)`. Free: no new machinery, just the two outputs.
+    bool mRecordPrincipal = false;
+    /// Restrict to this named `Cell` region; empty takes every surface cell.
+    std::string mRegion;
+};
+
+/// What `compute_curvature` computed, and what it found on the way.
+struct CurvatureResult {
+    /// The input mesh with the requested arrays attached.
+    Mesh mMesh;
+    /// The INPUT surface's defect counts. `mInconsistentPairs != 0` means the
+    /// sign of `H` is not trustworthy; see this header's file comment.
+    SurfaceQuality mQuality;
+    /// Vertices left NaN because they sit on a boundary.
+    std::int64_t mNumBoundary = 0;
+    /// Vertices left NaN because no surviving triangle references them.
+    std::int64_t mNumIsolated = 0;
+    /// Triangles skipped for zero area, by the same predicate `soup_quality`
+    /// uses -- so the two agree about what "degenerate" means.
+    std::int64_t mNumDegenerate = 0;
+    /// The sum of every vertex's angle defect, boundary vertices included.
+    ///
+    /// For a CLOSED surface this is `2*pi*chi` exactly -- `4*pi` for a sphere --
+    /// whatever the tessellation and whichever `CurvatureDualArea` was chosen.
+    /// On an open surface it is that minus the boundary's total turning, which
+    /// is a different (still meaningful) quantity.
+    double mTotalAngleDefect = 0.0;
+};
+
+/**
+ * @brief Per-vertex mean and Gaussian curvature of a surface mesh.
+ *
+ * Triangles come from `detail::build_triangle_soup`, which fans quads and
+ * rectangular polygons on the same diagonal `convert_cells(Simplexify)` uses,
+ * refuses a 3-D or polyhedron block by name pointing at `extract_surface`, and
+ * refuses a higher-order block pointing at `linearize`. A quad mesh's curvature
+ * is therefore the curvature of its canonical triangulation, not of the quad
+ * surface itself.
+ *
+ * @param rMesh a surface mesh.
+ * @param rOptions what to compute; see `CurvatureOptions`.
+ * @return the mesh with the requested `point_data` attached, plus the counters.
+ * @throws std::invalid_argument on a non-surface input (naming the fix) or an
+ *         unknown region name.
+ */
+MESHIOPLUSPLUS_API CurvatureResult compute_curvature(const Mesh& rMesh,
+                                                     const CurvatureOptions& rOptions = {});
+
+}  // namespace meshioplusplus
+// ===== end src/cpp/include/meshioplusplus/operations/curvature.hpp =====
 // ===== begin src/cpp/include/meshioplusplus/operations/data_average.hpp =====
 /**
  * @file operations/data_average.hpp
@@ -43795,6 +43989,30 @@ TriangleSoup build_triangle_soup(const Mesh& rSurface, const std::string& rRegio
     return soup;
 }
 
+SurfaceEdgeMap build_surface_edges(const TriangleSoup& rSoup) {
+    // Per undirected edge: how many triangles use it, and how many use it in the
+    // low->high direction. A consistently wound closed surface has every edge
+    // used exactly twice, once in each direction.
+    const std::size_t ntri = rSoup.NumTriangles();
+    SurfaceEdgeMap edges;
+    edges.reserve(ntri * 3 * 2);
+    for (std::size_t t = 0; t < ntri; ++t) {
+        const std::array<std::int64_t, 3>& v = rSoup.mVertices[t];
+        for (std::size_t e = 0; e < 3; ++e) {
+            const std::int64_t u = v[e];
+            const std::int64_t w = v[(e + 1) % 3];
+            const SurfaceEdgeKey key{u < w ? u : w, u < w ? w : u};
+            SurfaceEdgeRecord& rec = edges[key];
+            ++rec.mUsed;
+            if (u < w)
+                ++rec.mForward;
+            if (rec.mFirstTriangle < 0)
+                rec.mFirstTriangle = static_cast<std::int64_t>(t);
+        }
+    }
+    return edges;
+}
+
 SurfaceQuality soup_quality(const TriangleSoup& rSoup) {
     SurfaceQuality q;
     const std::size_t ntri = rSoup.NumTriangles();
@@ -43807,26 +44025,10 @@ SurfaceQuality soup_quality(const TriangleSoup& rSoup) {
             ++q.mDegenerateTriangles;
     }
 
-    // Per undirected edge: how many triangles use it, and how many use it in the
-    // low->high direction. A consistently wound closed surface has every edge
-    // used exactly twice, once in each direction.
-    std::unordered_map<SurfaceEdgeKey, std::array<std::int64_t, 2>, SurfaceEdgeKeyHash> edges;
-    edges.reserve(ntri * 3 * 2);
-    for (std::size_t t = 0; t < ntri; ++t) {
-        const std::array<std::int64_t, 3>& v = rSoup.mVertices[t];
-        for (std::size_t e = 0; e < 3; ++e) {
-            const std::int64_t u = v[e];
-            const std::int64_t w = v[(e + 1) % 3];
-            const SurfaceEdgeKey key{u < w ? u : w, u < w ? w : u};
-            std::array<std::int64_t, 2>& rec = edges[key];
-            ++rec[0];
-            if (u < w)
-                ++rec[1];
-        }
-    }
+    const SurfaceEdgeMap edges = build_surface_edges(rSoup);
     for (const auto& kv : edges) {
-        const std::int64_t used = kv.second[0];
-        const std::int64_t forward = kv.second[1];
+        const std::int64_t used = kv.second.mUsed;
+        const std::int64_t forward = kv.second.mForward;
         if (used == 1)
             ++q.mBoundaryEdges;
         else if (used > 2)
@@ -75662,6 +75864,295 @@ CropResult crop_predicate(const Mesh& rMesh, const std::string& rArray, RefineCo
 
 }  // namespace meshioplusplus
 // ===== end src/cpp/src/operations/crop.cpp =====
+// ===== begin src/cpp/src/operations/curvature.cpp =====
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <vector>
+
+// Project includes
+
+namespace meshioplusplus {
+namespace {
+
+using detail::Vec3;
+
+constexpr double kCurvTwoPi = 6.283185307179586476925286766559;
+constexpr double kCurvPi = 3.141592653589793238462643383279;
+
+/// One triangle corner's angle and the cotangent of it.
+///
+/// Both come from the same `(cross, dot)` pair, which is what keeps them
+/// consistent. The angle is `atan2(|cross|, dot)` rather than `acos` of a
+/// clamped ratio: `detail::sd_corner_angle` takes the `acos` route because a
+/// pseudonormal weight does not care about the last few digits, but an angle
+/// DEFECT is a sum of angles minus `2*pi`, so the digits are exactly what
+/// survives -- do not unify the two.
+///
+/// The cotangent is `dot / |cross|`, trig-free and correctly NEGATIVE at an
+/// obtuse corner. Never clamp it: clamping is the usual "fix" and it destroys
+/// the operator's linear precision, which is the whole reason to use cotangent
+/// weights rather than a uniform graph Laplacian.
+struct CurvCorner {
+    double mAngle = 0.0;
+    double mCotangent = 0.0;
+};
+
+CurvCorner curv_corner(const Vec3& rApex, const Vec3& rB, const Vec3& rC) {
+    const Vec3 u = detail::vec3_sub(rB, rApex);
+    const Vec3 v = detail::vec3_sub(rC, rApex);
+    const Vec3 cross = detail::vec3_cross(u, v);
+    const double cross_norm = std::sqrt(detail::vec3_norm_sq(cross));
+    const double dot = detail::vec3_dot(u, v);
+    CurvCorner out;
+    out.mAngle = std::atan2(cross_norm, dot);
+    out.mCotangent = cross_norm > 0.0 ? dot / cross_norm : 0.0;
+    return out;
+}
+
+/// Everything one serial pass over the triangles accumulates.
+struct CurvAccumulators {
+    std::vector<double> mAngleSum;  ///< sum of incident corner angles
+    std::vector<Vec3> mLaplacian;   ///< the cotangent Laplacian of the positions
+    std::vector<double> mArea;      ///< the dual area
+    std::vector<Vec3> mNormal;      ///< area-weighted vertex normal
+    std::vector<char> mTouched;     ///< referenced by at least one live triangle
+    std::int64_t mNumDegenerate = 0;
+};
+
+/// The per-vertex dual-area contributions of one triangle.
+///
+/// Mixed Voronoi (Meyer et al. 2003): a non-obtuse triangle contributes
+/// `(1/8) * (cot(alpha) * |e1|^2 + cot(beta) * |e2|^2)` to each of its corners,
+/// where the cotangents are at the two corners OPPOSITE the respective edges.
+/// An obtuse triangle has no valid Voronoi region, so it contributes half its
+/// area at the obtuse corner and a quarter at each of the others.
+void curv_dual_area(const Vec3& rA, const Vec3& rB, const Vec3& rC, const CurvCorner& rCa,
+                    const CurvCorner& rCb, const CurvCorner& rCc, double TriArea,
+                    CurvatureDualArea Mode, double* pOut) {
+    if (Mode == CurvatureDualArea::Barycentric) {
+        // Branch-free, hence bit-exactly twinnable in numpy.
+        const double third = TriArea / 3.0;
+        pOut[0] = third;
+        pOut[1] = third;
+        pOut[2] = third;
+        return;
+    }
+    const bool obtuse_a = rCa.mAngle > 0.5 * kCurvPi;
+    const bool obtuse_b = rCb.mAngle > 0.5 * kCurvPi;
+    const bool obtuse_c = rCc.mAngle > 0.5 * kCurvPi;
+    if (obtuse_a || obtuse_b || obtuse_c) {
+        pOut[0] = obtuse_a ? 0.5 * TriArea : 0.25 * TriArea;
+        pOut[1] = obtuse_b ? 0.5 * TriArea : 0.25 * TriArea;
+        pOut[2] = obtuse_c ? 0.5 * TriArea : 0.25 * TriArea;
+        return;
+    }
+    const double ab = detail::vec3_norm_sq(detail::vec3_sub(rB, rA));
+    const double bc = detail::vec3_norm_sq(detail::vec3_sub(rC, rB));
+    const double ca = detail::vec3_norm_sq(detail::vec3_sub(rA, rC));
+    // Edge AB is opposite corner C, BC opposite A, CA opposite B.
+    pOut[0] = 0.125 * (rCc.mCotangent * ab + rCb.mCotangent * ca);
+    pOut[1] = 0.125 * (rCc.mCotangent * ab + rCa.mCotangent * bc);
+    pOut[2] = 0.125 * (rCa.mCotangent * bc + rCb.mCotangent * ca);
+}
+
+/// The serial accumulation pass.
+///
+/// Serial deliberately: this is a scatter into shared per-vertex slots, so a
+/// `parallel_for` would be both racy and -- once made safe -- order-dependent
+/// in the last bits. The finalize pass below is the parallel half, and it is
+/// per-vertex and order-independent. The same phase split `surface_distance`
+/// and `surface.cpp` already use.
+CurvAccumulators curv_accumulate(const detail::TriangleSoup& rSoup, CurvatureDualArea Mode) {
+    const std::size_t npts = rSoup.mPoints.size();
+    CurvAccumulators acc;
+    acc.mAngleSum.assign(npts, 0.0);
+    acc.mLaplacian.assign(npts, Vec3{0.0, 0.0, 0.0});
+    acc.mArea.assign(npts, 0.0);
+    acc.mNormal.assign(npts, Vec3{0.0, 0.0, 0.0});
+    acc.mTouched.assign(npts, 0);
+
+    const std::size_t ntri = rSoup.NumTriangles();
+    for (std::size_t t = 0; t < ntri; ++t) {
+        const std::array<std::int64_t, 3>& v = rSoup.mVertices[t];
+        const Vec3& a = rSoup.mCorners[t * 3 + 0];
+        const Vec3& b = rSoup.mCorners[t * 3 + 1];
+        const Vec3& c = rSoup.mCorners[t * 3 + 2];
+        const Vec3 cross = detail::vec3_cross(detail::vec3_sub(b, a), detail::vec3_sub(c, a));
+        // Exactly `soup_quality`'s predicate, so the two cannot disagree about
+        // which triangles are degenerate.
+        if (!(detail::vec3_norm_sq(cross) > 0.0)) {
+            ++acc.mNumDegenerate;
+            continue;
+        }
+        const double tri_area = 0.5 * std::sqrt(detail::vec3_norm_sq(cross));
+
+        const CurvCorner ca = curv_corner(a, b, c);
+        const CurvCorner cb = curv_corner(b, c, a);
+        const CurvCorner cc = curv_corner(c, a, b);
+
+        double dual[3] = {0.0, 0.0, 0.0};
+        curv_dual_area(a, b, c, ca, cb, cc, tri_area, Mode, dual);
+
+        const Vec3* corner[3] = {&a, &b, &c};
+        const CurvCorner* angle[3] = {&ca, &cb, &cc};
+        for (std::size_t i = 0; i < 3; ++i) {
+            const std::size_t vi = static_cast<std::size_t>(v[i]);
+            acc.mTouched[vi] = 1;
+            acc.mAngleSum[vi] += angle[i]->mAngle;
+            acc.mArea[vi] += dual[i];
+            acc.mNormal[vi] = detail::vec3_add(acc.mNormal[vi], cross);  // area-weighted
+        }
+        // The cotangent Laplacian of the positions. Edge (i, j)'s weight is the
+        // cotangent at the corner OPPOSITE it; each triangle contributes one
+        // half of each of its three edges' weights, and the two triangles
+        // sharing an edge complete the usual (cot a + cot b) / 2.
+        for (std::size_t e = 0; e < 3; ++e) {
+            const std::size_t i = e;
+            const std::size_t j = (e + 1) % 3;
+            const std::size_t k = (e + 2) % 3;  // the opposite corner
+            const double w = 0.5 * angle[k]->mCotangent;
+            const Vec3 d = detail::vec3_sub(*corner[i], *corner[j]);
+            const std::size_t vi = static_cast<std::size_t>(v[i]);
+            const std::size_t vj = static_cast<std::size_t>(v[j]);
+            acc.mLaplacian[vi] = detail::vec3_add(acc.mLaplacian[vi], detail::vec3_scale(d, w));
+            acc.mLaplacian[vj] = detail::vec3_add(acc.mLaplacian[vj], detail::vec3_scale(d, -w));
+        }
+    }
+    return acc;
+}
+
+/// Which vertices sit on a boundary, from the SAME edge map `soup_quality` and
+/// `repair` read -- so the three cannot disagree about what a boundary is.
+std::vector<char> curv_boundary_vertices(const detail::TriangleSoup& rSoup,
+                                         const detail::SurfaceEdgeMap& rEdges) {
+    std::vector<char> is_boundary(rSoup.mPoints.size(), 0);
+    for (const auto& kv : rEdges) {
+        if (kv.second.mUsed != 1)
+            continue;
+        // A self-loop can only come from a triangle with a repeated corner,
+        // which is degenerate and was skipped by the accumulation pass. Letting
+        // it mark a boundary would NaN out a perfectly good vertex because of a
+        // triangle that contributed nothing -- and `soup_quality` counts it as
+        // a boundary edge (correctly, for its own purpose), so the shared map
+        // carries it and this is where it has to be filtered.
+        if (kv.first[0] == kv.first[1])
+            continue;
+        is_boundary[static_cast<std::size_t>(kv.first[0])] = 1;
+        is_boundary[static_cast<std::size_t>(kv.first[1])] = 1;
+    }
+    return is_boundary;
+}
+
+}  // namespace
+
+CurvatureDualArea curvature_dual_area_from_name(const std::string& rName) {
+    if (rName == "mixed-voronoi")
+        return CurvatureDualArea::MixedVoronoi;
+    if (rName == "barycentric")
+        return CurvatureDualArea::Barycentric;
+    throw std::invalid_argument("meshio++: curvature: unknown dual area '" + rName +
+                                "' (expected 'mixed-voronoi' or 'barycentric')");
+}
+
+const char* curvature_dual_area_name(CurvatureDualArea Mode) {
+    switch (Mode) {
+        case CurvatureDualArea::MixedVoronoi:
+            return "mixed-voronoi";
+        case CurvatureDualArea::Barycentric:
+            return "barycentric";
+    }
+    return "mixed-voronoi";
+}
+
+CurvatureResult compute_curvature(const Mesh& rMesh, const CurvatureOptions& rOptions) {
+    const detail::TriangleSoup soup = detail::build_triangle_soup(rMesh, rOptions.mRegion);
+    const detail::SurfaceEdgeMap edges = detail::build_surface_edges(soup);
+
+    CurvatureResult out;
+    out.mQuality = detail::soup_quality(soup);
+    out.mMesh = detail::clone_mesh(
+        rMesh, [](DataLocation, const std::string&, std::string&) { return true; });
+
+    const std::size_t npts = soup.mPoints.size();
+    const CurvAccumulators acc = curv_accumulate(soup, rOptions.mDualArea);
+    const std::vector<char> is_boundary = curv_boundary_vertices(soup, edges);
+    out.mNumDegenerate = acc.mNumDegenerate;
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    NDArray mean(DType::Float64, {npts});
+    NDArray gauss(DType::Float64, {npts});
+    NDArray area(DType::Float64, {npts});
+    NDArray principal(DType::Float64, {npts, 2});
+    double* p_mean = mean.As<double>();
+    double* p_gauss = gauss.As<double>();
+    double* p_area = area.As<double>();
+    double* p_principal = principal.As<double>();
+
+    // Per-vertex and order-independent: the parallel half of the phase split.
+    parallel_for(npts, [&](std::size_t i) {
+        const double a = acc.mArea[i];
+        p_area[i] = acc.mTouched[i] ? a : nan;
+        if (!acc.mTouched[i] || !(a > 0.0) || (is_boundary[i] && !rOptions.mIncludeBoundary)) {
+            p_mean[i] = nan;
+            p_gauss[i] = nan;
+            p_principal[i * 2] = nan;
+            p_principal[i * 2 + 1] = nan;
+            return;
+        }
+        // The geodesic form on a boundary vertex, the closed one otherwise.
+        const double turn = is_boundary[i] ? kCurvPi : kCurvTwoPi;
+        const double k = (turn - acc.mAngleSum[i]) / a;
+        // ||L p|| / 2A is |H|; the sign comes from whether the mean-curvature
+        // normal points along the surface normal or against it. That is what
+        // makes H orientation-dependent and K not.
+        const Vec3& lp = acc.mLaplacian[i];
+        const double h_mag = 0.5 * std::sqrt(detail::vec3_norm_sq(lp)) / a;
+        // `mLaplacian` accumulates sum(w * (p_i - p_j)), which is the NEGATIVE
+        // of the usual Laplacian sum(w * (p_j - p_i)), so the mean-curvature
+        // normal is -lp. On a convex outward-oriented surface that points along
+        // the vertex normal, and H must come out positive there.
+        const double sign = detail::vec3_dot(lp, acc.mNormal[i]) > 0.0 ? 1.0 : -1.0;
+        const double h = h_mag * sign;
+        p_mean[i] = h;
+        p_gauss[i] = k;
+        // k1, k2 = H +- sqrt(H^2 - K). The radicand is negative only through
+        // discretization error, so clamp rather than produce NaN.
+        const double disc = h * h - k;
+        const double root = std::sqrt(disc > 0.0 ? disc : 0.0);
+        p_principal[i * 2] = h + root;
+        p_principal[i * 2 + 1] = h - root;
+    });
+
+    for (std::size_t i = 0; i < npts; ++i) {
+        if (!acc.mTouched[i])
+            ++out.mNumIsolated;
+        else if (is_boundary[i])
+            ++out.mNumBoundary;
+        out.mTotalAngleDefect += acc.mTouched[i] ? (kCurvTwoPi - acc.mAngleSum[i]) : 0.0;
+    }
+
+    if (rOptions.mMean)
+        out.mMesh.AddPointData(kCurvatureMeanName, std::move(mean));
+    if (rOptions.mGaussian)
+        out.mMesh.AddPointData(kCurvatureGaussianName, std::move(gauss));
+    if (rOptions.mRecordArea)
+        out.mMesh.AddPointData(kCurvatureAreaName, std::move(area));
+    if (rOptions.mRecordPrincipal)
+        out.mMesh.AddPointData(kCurvaturePrincipalName, std::move(principal));
+
+    if (out.mQuality.mInconsistentPairs != 0)
+        log::warn(
+            "curvature: {} edge pair(s) wind the same way, so the sign of "
+            "'{}' is not trustworthy; run repair(mesh, {{.mFixOrientation = true}}) first",
+            out.mQuality.mInconsistentPairs, kCurvatureMeanName);
+    return out;
+}
+
+}  // namespace meshioplusplus
+// ===== end src/cpp/src/operations/curvature.cpp =====
 // ===== begin src/cpp/src/operations/data_average.cpp =====
 #include <cmath>
 #include <cstddef>
@@ -84112,6 +84603,9 @@ const std::vector<PipeOpSpec>& pipe_op_table() {
         {"Section", {"Point", "Normal", "RecordParentIds"}},  // alias of Slice
         {"Gradient", {"Array", "Operator", "Method", "Location", "Output", "Component"}},
         {"Hessian", {"Array", "Method", "Location", "Output"}},
+        {"Curvature",
+         {"Mean", "Gaussian", "DualArea", "IncludeBoundary", "RecordArea",
+          "RecordPrincipal", "Region"}},
         {"EstimateError", {"Array", "Method", "Marking", "MarkingValue", "Output", "Marked"}},
         {"Remesh",
          {"NumClusters", "Subdivide", "SubsampleRatio", "MaxSubdivide", "MaxIterations",
@@ -84541,6 +85035,33 @@ Mesh apply_pipeline_step(Mesh mesh, const PipelineStep& rStep, PipelineReport& r
             rReport.mWarnings.push_back("hessian: " + std::to_string(hr.mNumSkipped) +
                                         " cell(s) could not be evaluated and are NaN");
         return std::move(hr.mMesh);
+    }
+    if (op == "Curvature") {
+        // A pure data step: geometry is untouched, so the pipeline carries the
+        // mesh straight through with the curvature arrays attached.
+        CurvatureOptions opts;
+        opts.mMean = pipe_flag(rStep, "Mean", true);
+        opts.mGaussian = pipe_flag(rStep, "Gaussian", true);
+        opts.mDualArea = curvature_dual_area_from_name(pipe_text(rStep, "DualArea", "mixed-voronoi"));
+        opts.mIncludeBoundary = pipe_flag(rStep, "IncludeBoundary", false);
+        opts.mRecordArea = pipe_flag(rStep, "RecordArea", false);
+        opts.mRecordPrincipal = pipe_flag(rStep, "RecordPrincipal", false);
+        opts.mRegion = pipe_text(rStep, "Region", "");
+        CurvatureResult cr = compute_curvature(mesh, opts);
+        pipe_push_step(rReport, rStep,
+                       {{"NumBoundary", static_cast<double>(cr.mNumBoundary)},
+                        {"NumIsolated", static_cast<double>(cr.mNumIsolated)},
+                        {"NumDegenerate", static_cast<double>(cr.mNumDegenerate)},
+                        {"TotalAngleDefect", cr.mTotalAngleDefect}});
+        // H's sign comes from the surface's own winding, so a mesh whose facets
+        // disagree about which side is out yields sign-flipped patches with no
+        // error raised. Say so rather than letting it pass silently.
+        if (cr.mQuality.mInconsistentPairs > 0)
+            rReport.mWarnings.push_back(
+                "curvature: " + std::to_string(cr.mQuality.mInconsistentPairs) +
+                " edge pair(s) wind the same way, so the sign of 'curvature:mean' is not "
+                "trustworthy");
+        return std::move(cr.mMesh);
     }
     if (op == "EstimateError") {
         // A pure data step: geometry is untouched, so the pipeline carries the

@@ -44,6 +44,7 @@ from .. import (
     cell_data_to_point_data,
     clean,
     compute_bandwidth,
+    compute_curvature,
     compute_quality,
     compute_sdf,
     compute_stats,
@@ -1276,6 +1277,47 @@ def tool_hessian(
         out,
         num_skipped=int(report["num_skipped"]),
         num_fallback=int(report["num_fallback"]),
+    )
+
+
+def tool_curvature(
+    input_path,
+    output_path,
+    input_format=None,
+    output_format=None,
+    mean=True,
+    gaussian=True,
+    dual_area="mixed-voronoi",
+    include_boundary=False,
+    record_area=False,
+    record_principal=False,
+    region="",
+):
+    """Per-vertex mean and Gaussian curvature of a surface, by the angle defect
+    (K) and the cotangent Laplace-Beltrami operator (H) -- the signed
+    distance's companion as a node feature. Reports total_angle_defect, which
+    is 2*pi*chi exactly for a closed surface (4*pi for a sphere) whatever the
+    tessellation: the cheapest check that a result is sane."""
+    mesh = _load(input_path, input_format)
+    out, report = compute_curvature(
+        mesh,
+        mean=mean,
+        gaussian=gaussian,
+        dual_area=dual_area,
+        include_boundary=include_boundary,
+        record_area=record_area,
+        record_principal=record_principal,
+        region=region,
+        return_report=True,
+    )
+    return _result(
+        _store(out, output_path, output_format),
+        out,
+        num_boundary=int(report["num_boundary"]),
+        num_isolated=int(report["num_isolated"]),
+        num_degenerate=int(report["num_degenerate"]),
+        total_angle_defect=float(report["total_angle_defect"]),
+        quality=report["quality"],
     )
 
 
@@ -2812,6 +2854,10 @@ TOOL_REGISTRY = OrderedDict(
         ),
         ("gradient", {"fn": tool_gradient, "wraps": ("gradient",), "gated": None}),
         ("hessian", {"fn": tool_hessian, "wraps": ("hessian",), "gated": None}),
+        (
+            "curvature",
+            {"fn": tool_curvature, "wraps": ("compute_curvature",), "gated": None},
+        ),
         (
             "estimate_error",
             {"fn": tool_estimate_error, "wraps": ("estimate_error",), "gated": None},

@@ -1602,6 +1602,69 @@ function voxelize(m::Mesh; resolution=nothing, cell_size=nothing, bounds=nothing
      spacing=Tuple(Float64.(spacing)), num_occupied=Int(occupied[]))
 end
 
+const _CURVATURE_DUAL_AREAS = Dict(:mixed_voronoi => Int32(0), :barycentric => Int32(1))
+
+"""
+    compute_curvature(m; mean=true, gaussian=true, dual_area=:mixed_voronoi,
+                      include_boundary=false, record_area=false,
+                      record_principal=false, region="")
+        -> (; mesh, quality, num_boundary, num_isolated, num_degenerate,
+             total_angle_defect)
+
+Per-vertex mean (`H`) and Gaussian (`K`) curvature of a surface mesh, by the
+angle defect for `K` and the cotangent Laplace-Beltrami operator for `H` — the
+signed distance's natural companion as a node feature.
+
+Writes `curvature:mean` and `curvature:gaussian` as point data, optionally
+`curvature:area` (the dual area each was divided by) and `curvature:principal`
+(`(n, 2)`, `k1 >= k2`). Geometry, connectivity and existing data are carried
+through unchanged.
+
+`total_angle_defect` is the oracle: on a CLOSED surface it is `2*pi*chi`
+exactly — `4*pi` for anything sphere-like — whatever the tessellation and
+whichever `dual_area`, so a value that is not that means the input is not
+closed or the result is not sane.
+
+`H` is orientation-dependent and `K` is not, so check
+`quality.inconsistent_pairs` before trusting a sign: a nonzero count means
+facets disagree about which side is out. This never repairs its input.
+"""
+function compute_curvature(m::Mesh; mean::Bool=true, gaussian::Bool=true,
+                           dual_area::Symbol=:mixed_voronoi,
+                           include_boundary::Bool=false, record_area::Bool=false,
+                           record_principal::Bool=false, region::AbstractString="")
+    haskey(_CURVATURE_DUAL_AREAS, dual_area) ||
+        throw(ArgumentError("meshio++: curvature: unknown dual area '$(dual_area)' " *
+                            "(expected :mixed_voronoi or :barycentric)"))
+    report = Ref{_CCurvatureReport}()
+    region_c = Vector{UInt8}(codeunits(String(region) * "\0"))
+    ptr = GC.@preserve region_c begin
+        opts = _CCurvatureOpts(Cstring(pointer(region_c)),
+                               mean ? Int32(1) : Int32(0),
+                               gaussian ? Int32(1) : Int32(0),
+                               _CURVATURE_DUAL_AREAS[dual_area],
+                               include_boundary ? Int32(1) : Int32(0),
+                               record_area ? Int32(1) : Int32(0),
+                               record_principal ? Int32(1) : Int32(0),
+                               (Int64(0), Int64(0), Int64(0), Int64(0), Int64(0), Int64(0)))
+        ccall(_sym(:mio_compute_curvature), Ptr{Cvoid},
+              (Ptr{Cvoid}, Ref{_CCurvatureOpts}, Ptr{_CCurvatureReport}),
+              _handle(m), Ref(opts), report)
+    end
+    r = _check_ptr(ptr)
+    rep = report[]
+    q = rep.quality
+    (mesh=Mesh(r),
+     quality=(boundary_edges=Int(q.boundary_edges),
+              non_manifold_edges=Int(q.non_manifold_edges),
+              inconsistent_pairs=Int(q.inconsistent_pairs),
+              degenerate_triangles=Int(q.degenerate_triangles),
+              watertight=q.watertight != 0),
+     num_boundary=Int(rep.num_boundary), num_isolated=Int(rep.num_isolated),
+     num_degenerate=Int(rep.num_degenerate),
+     total_angle_defect=Float64(rep.total_angle_defect))
+end
+
 """
     surface_watertight_check(m) -> NamedTuple
 

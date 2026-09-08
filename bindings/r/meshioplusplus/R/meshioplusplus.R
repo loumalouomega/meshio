@@ -930,6 +930,62 @@ mio_remesh <- function(mesh, num_clusters, subdivide = -1L, subsample_ratio = 10
   )
 }
 
+
+#' Per-vertex mean and Gaussian curvature of a surface mesh
+#'
+#' `K` (Gaussian curvature) by the angle defect, `H` (mean curvature) by the
+#' cotangent Laplace-Beltrami operator -- the estimators the
+#' discrete-differential-geometry convergence results are about, and NVIDIA
+#' PhysicsNeMo's own `gaussian_curvature_vertices`/`mean_curvature_vertices`
+#' use. The signed distance's natural companion as a node feature: `sdf` says
+#' how far a point is from the surface, this says how the surface bends
+#' there.
+#'
+#' Writes `curvature:mean` and `curvature:gaussian` as point data, optionally
+#' `curvature:area` (the dual area each was divided by) and
+#' `curvature:principal` (an `(n, 2)` matrix, `k1 >= k2`). Geometry,
+#' connectivity and existing data are carried through unchanged. Triangles
+#' come from the same fan `convert_cells(simplexify)` uses, so a quad mesh's
+#' curvature is the curvature of its canonical triangulation; a volume or
+#' polyhedron block is refused by name pointing at `extract_surface`, a
+#' higher-order one pointing at `linearize`.
+#'
+#' `total_angle_defect` is the oracle: on a CLOSED surface it is `2*pi*chi`
+#' exactly -- `4*pi` for anything sphere-like -- whatever the tessellation and
+#' whichever `dual_area`, so a value that is not that means the input is not
+#' closed or the result is not sane.
+#'
+#' `H` is orientation-dependent and `K` is not, so check
+#' `quality$inconsistent_pairs` before trusting a sign: a nonzero count means
+#' facets disagree about which side is out. This never repairs its input.
+#'
+#' @param mesh A `mio_mesh` (surface only).
+#' @param mean Attach `curvature:mean` (`TRUE` by default).
+#' @param gaussian Attach `curvature:gaussian` (`TRUE` by default).
+#' @param dual_area `"mixed-voronoi"` (default, converges better on an
+#'   irregular tessellation) or `"barycentric"` (cruder but branch-free).
+#' @param include_boundary Compute a biased value at boundary vertices
+#'   instead of leaving them `NaN`. Isolated vertices are `NaN` either way.
+#' @param record_area Also attach `curvature:area`.
+#' @param record_principal Also attach `curvature:principal`.
+#' @param region Restrict to this named cell region; `""` (default) takes
+#'   every surface cell.
+#' @return A list of `mesh`, `quality` (a list of `boundary_edges`,
+#'   `non_manifold_edges`, `inconsistent_pairs`, `degenerate_triangles`,
+#'   `watertight`), `num_boundary`, `num_isolated`, `num_degenerate` and
+#'   `total_angle_defect`.
+#' @export
+mio_compute_curvature <- function(mesh, mean = TRUE, gaussian = TRUE,
+                                  dual_area = "mixed-voronoi",
+                                  include_boundary = FALSE, record_area = FALSE,
+                                  record_principal = FALSE, region = "") {
+  .Call(
+    R_mio_compute_curvature, mesh, isTRUE(mean), isTRUE(gaussian),
+    as.character(dual_area), isTRUE(include_boundary), isTRUE(record_area),
+    isTRUE(record_principal), as.character(region)
+  )
+}
+
 #' Retetrahedralize a volume mesh (or a closed surface) by isosurface stuffing
 #'
 #' The volumetric sibling of [mio_remesh()], generating an entirely new tet

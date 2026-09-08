@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 // Project includes
@@ -203,6 +204,25 @@ std::vector<char> curv_boundary_vertices(const detail::TriangleSoup& rSoup,
 }
 
 }  // namespace
+
+CurvatureDualArea curvature_dual_area_from_name(const std::string& rName) {
+    if (rName == "mixed-voronoi")
+        return CurvatureDualArea::MixedVoronoi;
+    if (rName == "barycentric")
+        return CurvatureDualArea::Barycentric;
+    throw std::invalid_argument("meshio++: curvature: unknown dual area '" + rName +
+                                "' (expected 'mixed-voronoi' or 'barycentric')");
+}
+
+const char* curvature_dual_area_name(CurvatureDualArea Mode) {
+    switch (Mode) {
+        case CurvatureDualArea::MixedVoronoi:
+            return "mixed-voronoi";
+        case CurvatureDualArea::Barycentric:
+            return "barycentric";
+    }
+    return "mixed-voronoi";
+}
 
 CurvatureResult compute_curvature(const Mesh& rMesh, const CurvatureOptions& rOptions) {
     const detail::TriangleSoup soup = detail::build_triangle_soup(rMesh, rOptions.mRegion);

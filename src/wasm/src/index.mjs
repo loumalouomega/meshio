@@ -165,6 +165,7 @@ function resolveVariant(variant) {
  *   remesh: (mesh: Mesh, numClusters: number, subdivide?: number, subsampleRatio?: number, maxSubdivide?: number, maxIterations?: number, maxRepairPasses?: number, metric?: string, gradation?: number, preserveBoundary?: boolean, maxAnisotropy?: number) => {mesh: Mesh, numClusters: number, numIterations: number, subdivideApplied: number, numIsolatedClusters: number, numNonManifoldVertices: number},
  *   remeshVolume: (mesh: Mesh, resolution?: number[], cellSize?: number, bounds?: number[], padding?: number, paddingRelative?: number, maxCells?: number, maxTets?: number, warpFraction?: number, sign?: string, watertightCheck?: string) => {mesh: Mesh, numTets: number, numVerticesWarped: number, numTetsRejected: number, numNonManifoldEdges: number},
  *   optimizeVolume: (mesh: Mesh, maxIterations?: number, relocate?: boolean, flip?: boolean, preserveBoundary?: boolean, minImprovement?: number) => {mesh: Mesh, numFlips: number, num23Flips: number, num32Flips: number, numVerticesMoved: number, numTets: number, minQualityBefore: number, minQualityAfter: number},
+ *   computeCurvature: (mesh: Mesh, mean?: boolean, gaussian?: boolean, dualArea?: string, includeBoundary?: boolean, recordArea?: boolean, recordPrincipal?: boolean, region?: string) => {mesh: Mesh, numBoundary: number, numIsolated: number, numDegenerate: number, totalAngleDefect: number, quality: {boundaryEdges: number, nonManifoldEdges: number, inconsistentPairs: number, degenerateTriangles: number, watertight: boolean}},
  *   split: (mesh: Mesh, by: string, tagName?: string) => {key: string, mesh: Mesh}[],
  *   convertCells: (mesh: Mesh, mode?: string, recordParentIds?: boolean) => Mesh,
  *   subdivide: (mesh: Mesh, recordParentIds?: boolean) => Mesh,
@@ -545,6 +546,18 @@ export async function loadMeshioPlusPlus(moduleOverrides = {}, { variant = 'auto
         ) =>
             Module.optimizeVolume(mesh, maxIterations, relocate, flip, preserveBoundary,
                 minImprovement),
+        computeCurvature: (
+            mesh,
+            mean = true,
+            gaussian = true,
+            dualArea = 'mixed-voronoi',
+            includeBoundary = false,
+            recordArea = false,
+            recordPrincipal = false,
+            region = '',
+        ) =>
+            Module.computeCurvature(mesh, mean, gaussian, dualArea, includeBoundary,
+                recordArea, recordPrincipal, region),
         split: (mesh, by, tagName = '') => Module.split(mesh, by, tagName),
         convertCells: (mesh, mode = 'linearize', recordParentIds = false) =>
             Module.convertCells(mesh, mode, recordParentIds),

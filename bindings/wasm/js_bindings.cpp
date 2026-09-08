@@ -91,6 +91,7 @@
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/conservative_interpolate.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
+#include "meshioplusplus/operations/curvature.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/data_calc.hpp"
@@ -2213,6 +2214,44 @@ val remesh_volume_js(const val& rMeshObj, const val& rResolution, double cellSiz
  * field_data and Point regions carry; cell_data + Cell/Side regions are
  * dropped. See operations/optimize_volume.hpp and doc/optimize_volume.md.
  */
+/**
+ * @brief Per-vertex mean and Gaussian curvature of a surface -- K by the
+ * angle defect, H by the cotangent Laplace-Beltrami operator. The result
+ * carries `totalAngleDefect` (2*pi*chi for a closed surface, 4*pi for a
+ * sphere) as the Gauss-Bonnet oracle, and the input's `quality` since H's
+ * sign is orientation-dependent.
+ */
+val compute_curvature_js(const val& rMeshObj, bool mean, bool gaussian,
+                         const std::string& rDualArea, bool includeBoundary, bool recordArea,
+                         bool recordPrincipal, const std::string& rRegion) {
+    return with_js_errors([&]() -> val {
+        meshioplusplus::CurvatureOptions options;
+        options.mMean = mean;
+        options.mGaussian = gaussian;
+        options.mDualArea = meshioplusplus::curvature_dual_area_from_name(rDualArea);
+        options.mIncludeBoundary = includeBoundary;
+        options.mRecordArea = recordArea;
+        options.mRecordPrincipal = recordPrincipal;
+        options.mRegion = rRegion;
+        meshioplusplus::CurvatureResult r =
+            meshioplusplus::compute_curvature(val_to_mesh(rMeshObj), options);
+        val quality = val::object();
+        quality.set("boundaryEdges", static_cast<double>(r.mQuality.mBoundaryEdges));
+        quality.set("nonManifoldEdges", static_cast<double>(r.mQuality.mNonManifoldEdges));
+        quality.set("inconsistentPairs", static_cast<double>(r.mQuality.mInconsistentPairs));
+        quality.set("degenerateTriangles", static_cast<double>(r.mQuality.mDegenerateTriangles));
+        quality.set("watertight", r.mQuality.mWatertight);
+        val out = val::object();
+        out.set("mesh", mesh_to_val(r.mMesh));
+        out.set("numBoundary", static_cast<double>(r.mNumBoundary));
+        out.set("numIsolated", static_cast<double>(r.mNumIsolated));
+        out.set("numDegenerate", static_cast<double>(r.mNumDegenerate));
+        out.set("totalAngleDefect", r.mTotalAngleDefect);
+        out.set("quality", quality);
+        return out;
+    });
+}
+
 val optimize_volume_js(const val& rMeshObj, double maxIterations, bool relocate, bool flip,
                        bool preserveBoundary, double minImprovement) {
     return with_js_errors([&]() -> val {
@@ -3148,6 +3187,7 @@ EMSCRIPTEN_BINDINGS(meshioplusplus_wasm) {
     emscripten::function("remesh", &remesh_js);
     emscripten::function("remeshVolume", &remesh_volume_js);
     emscripten::function("optimizeVolume", &optimize_volume_js);
+    emscripten::function("computeCurvature", &compute_curvature_js);
     emscripten::function("cropBbox", &crop_bbox_js);
     emscripten::function("cropPlane", &crop_plane_js);
     emscripten::function("cropPredicate", &crop_predicate_js);

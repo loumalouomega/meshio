@@ -58,6 +58,7 @@ from ._clean import clean
 from ._conservative_interpolate import conservative_interpolate
 from ._convert_cells import convert_cells
 from ._crop import crop
+from ._curvature import compute_curvature
 from ._data_average import cell_data_to_point_data, point_data_to_cell_data
 from ._data_calc import data_calc
 from ._data_condition import data_condition
@@ -236,6 +237,7 @@ __all__ = [
     "extract_skin",
     "extract_surface",
     "compute_quality",
+    "compute_curvature",
     "attach_quality",
     "sniff_format",
     "reorder",

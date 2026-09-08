@@ -91,6 +91,7 @@ export default defineConfig({
           { text: "Mesh and regular grids", link: "/grids" },
           { text: "Point-cloud budgets", link: "/point_budgets" },
           { text: "Signed distance", link: "/sdf" },
+          { text: "Curvature (mean / Gaussian)", link: "/curvature" },
           { text: "Field derivatives", link: "/gradient" },
           { text: "Error estimation", link: "/error" },
           { text: "Field integration", link: "/field_integration" },

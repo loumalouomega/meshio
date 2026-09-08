@@ -909,6 +909,59 @@ def _register_operations(server: FastMCP) -> None:
         )
 
     @server.tool()
+    def curvature(
+        input_path: str,
+        output_path: str,
+        input_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        mean: bool = True,
+        gaussian: bool = True,
+        dual_area: str = "mixed-voronoi",
+        include_boundary: bool = False,
+        record_area: bool = False,
+        record_principal: bool = False,
+        region: str = "",
+    ) -> dict:
+        """Per-vertex mean (H) and Gaussian (K) curvature of a surface mesh --
+        the signed distance's natural companion as a node feature: sdf says
+        how far a point is from the surface, this says how the surface bends
+        there.
+
+        K is the angle defect and H the cotangent Laplace-Beltrami operator,
+        the estimators the discrete-differential-geometry convergence results
+        are about. Writes curvature:mean and curvature:gaussian, optionally
+        curvature:area (the dual area each was divided by) and
+        curvature:principal ((n,2), k1 >= k2). Triangles come from the same
+        fan convert_cells(simplexify) uses, so a quad mesh's curvature is the
+        curvature of its canonical triangulation; a volume or polyhedron block
+        is refused by name pointing at extract_surface and a higher-order one
+        pointing at linearize. dual_area is "mixed-voronoi" (default, better
+        on an irregular tessellation) or "barycentric" (cruder but
+        branch-free). Boundary vertices are NaN unless include_boundary, and
+        isolated ones always; both are counted. total_angle_defect is the
+        oracle: on a CLOSED surface it is 2*pi*chi exactly -- 4*pi for
+        anything sphere-like -- whatever the tessellation and whichever dual
+        area, so a value that is not that means the input is not closed or the
+        result is not sane. H's sign is orientation-dependent and K's is not,
+        so check quality.inconsistent_pairs before trusting a sign: a nonzero
+        count means facets disagree about which side is out and H is
+        sign-flipped in patches. This never repairs its input."""
+        return _guard(
+            _tools.tool_curvature,
+            input_path=input_path,
+            output_path=output_path,
+            input_format=input_format,
+            output_format=output_format,
+            mean=mean,
+            gaussian=gaussian,
+            dual_area=dual_area,
+            include_boundary=include_boundary,
+            record_area=record_area,
+            record_principal=record_principal,
+            region=region,
+        )
+
+    @server.tool()
     def estimate_error(
         input_path: str,
         output_path: str,

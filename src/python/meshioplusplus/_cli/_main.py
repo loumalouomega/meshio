@@ -12,6 +12,7 @@ from . import (
     _convert,
     _convert_cells,
     _crop,
+    _curvature,
     _data,
     _dataset,
     _decimate,
@@ -96,6 +97,13 @@ def main(argv=None):
     )
     _quality.add_args(parser)
     parser.set_defaults(func=_quality.quality)
+
+    parser = subparsers.add_parser(
+        "curvature",
+        help="Per-vertex mean and Gaussian curvature of a surface",
+    )
+    _curvature.add_args(parser)
+    parser.set_defaults(func=_curvature.curvature_cmd)
 
     parser = subparsers.add_parser(
         "extract-surface",
