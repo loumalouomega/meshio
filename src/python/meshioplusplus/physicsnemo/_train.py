@@ -83,6 +83,7 @@ _TOP_KEYS = (
     "Read",
     "Notes",
     "Tags",
+    "Augmentation",
 )
 #: Every ``Model`` key, across families. Which of them are *legal* depends on
 #: ``Model.Name`` -- see ``_MODEL_FAMILY_KEYS`` -- so that a graph
@@ -284,6 +285,7 @@ class TrainSpec:
     target_offset: int = 0
     target_delta: bool = False
     proximity: Optional[Dict[str, Any]] = None
+    augmentation: Optional[Dict[str, Any]] = None
     # Grid (srresnet); resolution/cell_size are the `GridSpec.from_mesh` pair
     resolution: Optional[Tuple[int, int, int]] = None
     cell_size: Optional[float] = None
@@ -416,6 +418,23 @@ def spec_from_dict(doc, *, base_dir=None) -> TrainSpec:
             f"remove {unwanted} or change Model.Name"
         )
 
+    # Augmentation rotates and rescales the geometry, which moves a grid
+    # sample's own lattice relative to the mesh and so changes its coverage.
+    # Refused by name for the grid family rather than silently applied.
+    augmentation = doc.get("Augmentation")
+    if augmentation is not None and augmentation is not False:
+        if name == "srresnet":
+            raise ValueError(
+                f"{_ERR}Augmentation applies to the graph families; a "
+                "'srresnet' samples a fixed lattice, so rotating the mesh "
+                "under it would change the pair's own coverage"
+            )
+        from ._augment import Augmentation
+
+        augmentation = Augmentation.from_spec(augmentation).to_dict()
+    else:
+        augmentation = None
+
     aggregation = str(model.get("Aggregation", "sum"))
     if aggregation not in _AGGREGATIONS:
         raise ValueError(
@@ -517,6 +536,7 @@ def spec_from_dict(doc, *, base_dir=None) -> TrainSpec:
         read=dict(read),
         notes=notes,
         tags=_names(doc.get("Tags", ()), "Tags"),
+        augmentation=augmentation,
         base_dir=base_dir,
     )
 
@@ -591,6 +611,20 @@ def spec_to_dict(spec: TrainSpec) -> dict:
             doc["Graph"]["Proximity"] = _proximity_to_document(spec.proximity)
     if spec.read:
         doc["Read"] = dict(spec.read)
+    if spec.augmentation is not None:
+        block = {"Seed": spec.augmentation.get("seed", 0)}
+        for key, name in (
+            ("rotation", "Rotation"),
+            ("scale", "Scale"),
+            ("translation", "Translation"),
+        ):
+            inner = spec.augmentation.get(key)
+            if inner is not None:
+                block[name] = {
+                    "".join(part.title() for part in k.split("_")): v
+                    for k, v in inner.items()
+                }
+        doc["Augmentation"] = block
     if spec.notes is not None:
         doc["Notes"] = spec.notes
     if spec.tags:
@@ -808,6 +842,9 @@ def card_from_run(
         "target_fields": list(spec.target_fields),
         "graph": spec.graph_kwargs(),
         "read": dict(spec.read),
+        # Informational: a checkpoint says what poses it was shown. Inference
+        # never augments, so nothing reads this back.
+        "augmentation": spec.augmentation,
         "input_normalization": _input_normalization(schema, node_stats, spec.fields),
         "output_normalization": {
             "mean": stat_vectors(

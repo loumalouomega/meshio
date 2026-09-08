@@ -28,7 +28,7 @@ meshioplusplus.write("part_moved.vtu", t)
 | `rotate` | `(axis, angle_deg)` where `axis` is `"x"`/`"y"`/`"z"` or a 3-vector; angle in **degrees** |
 | `matrix` | a full 4×4 (or flat 16-element) row-major affine matrix; overrides the others |
 | `scale_units` | a scalar unit-conversion factor |
-| `rotate_vector_data` | when true, rotate vector (dim 3) / tensor (dim 9) `point_data` by the linear part; off by default |
+| `rotate_vector_data` | when true, rotate vector (dim 3) / tensor (dim 9) `point_data` **and `cell_data`** by the linear part; off by default |
 
 Several builders compose (in the fixed order units → scale → rotate → translate). An orientation-reversing transform (negative determinant of the 3×3 linear block) logs a warning that cell orientation may be flipped.
 
@@ -36,7 +36,7 @@ Several builders compose (in the fixed order units → scale → rotate → tran
 
 - **Points** are transformed by `p' = M · [x, y, z, 1]`.
 - **Connectivity**, **`cell_data`**, and **`field_data`** are unchanged.
-- **`point_data`** is copied unchanged unless `rotate_vector_data=True`, which rotates arrays whose trailing dimension is 3 (`R·v`) or 9 (`R·A·Rᵀ`).
+- **`point_data` and `cell_data`** are copied unchanged unless `rotate_vector_data=True`, which rotates float arrays whose trailing dimension is 3 (`R·v`) or 9 (`R·A·Rᵀ`) at either location. A vector living on a cell rotates exactly as one living on a point does; before v10.33.0 the flag reached point data only, and cell data rode through in the old frame — silently, since nothing about an array says which frame it is in. An integer array is never rotated, so a material tag is safe.
 - **`point_sets` / `cell_sets`** pass through unchanged (indices are stable).
 
 ## CLI

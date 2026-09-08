@@ -294,6 +294,63 @@ That last number is the one to report. A pointwise error cannot distinguish a fi
 
 Nineteen times better pointwise, and **ninety-three times** closer in the spectrum. The two ratios differ that much because they measure different things: the baseline gets the large scales roughly right and loses the small ones entirely, which is precisely what a pointwise error under-reports. See [`example/physicsnemo/superresolution.py`](https://github.com/loumalouomega/meshioplusplus/blob/main/example/physicsnemo/superresolution.py).
 
+## Temporal windows and rollout
+
+A steady-state surrogate maps one mesh to one answer. A *transient* one maps a short history to the next state, and the shape it wants is a **window**: the last K states of every node, laid side by side along the channel axis.
+
+```python
+for entry_id, time, sample in mpn.iter_windows(manifest, fields=["T"], history_size=3):
+    sample.arrays["x"]      # (N, K*W) — the window
+    sample.arrays["y"]      # (N, W)   — the state that followed
+    sample.x_columns        # ('T@-2', 'T@-1', 'T@-0') — the age is part of the contract
+```
+
+**Oldest first**, everywhere: the last `W` columns are always the most recent state. `make_window` is the single owner of that layout, shared by the three schemes and by `rollout`'s own history, because a model trained on one ordering and fed the other produces plausible, wrong numbers with nothing to flag them. The recorded `x_columns` name the age explicitly, so a stored contract catches the disagreement rather than leaving it to a convention nobody re-reads.
+
+| scheme | samples per series | what it learns |
+| --- | --- | --- |
+| `single_step` | `T − K` | the autoregressive step: each window paired with the state that followed |
+| `one_shot` | 1 | the first window paired with the last state — a model that jumps to the end |
+| `time_conditional` | `T − K` | the first window plus a normalized time channel, so error does not compound |
+
+The streaming invariant holds: `window_samples` keeps at most K **feature matrices** and one mesh alive, never K meshes, and reads each step exactly once.
+
+**Rollout** is the measurement a one-step validation loss cannot make — feed the model its own prediction and watch the error grow:
+
+```python
+result = mpn.rollout(predict_fn, series, history_size=3, fields=["T"])
+result.errors        # (T − K,) per-step RMSE against the truth
+```
+
+`predict_fn` takes one `(N, K*W)` window and returns the next `(N, W)` state. Injecting it keeps this module torch-free: the caller owns the framework, normalization and device, and meshio++ owns the loop. It is seeded with K *true* states and everything after that is its own output, which is what makes the drift real — the same evaluation under teacher forcing reports a flat error and tells you nothing.
+
+## Dataset augmentation
+
+A surrogate trained on a hundred solves of the same part in the same pose learns the pose. The hard half of fixing that was already here: [`transform(rotate_vector_data=True)`](transform.md) rotates vector and rank-2 tensor fields **coherently with the geometry**, point-located and (since v10.33.0) cell-located alike — a rotated mesh carrying an unrotated velocity field is a physically impossible sample a model will happily learn from.
+
+What was missing is the wrapper:
+
+```python
+augmentation = mpn.Augmentation(rotation=True, scale={"low": 0.9, "high": 1.1}, seed=0)
+
+for entry_id, time, sample in mpn.iter_samples(manifest, fields=["T"],
+                                               augmentation=augmentation, epoch=3):
+    ...
+```
+
+Every draw is a pure function of `(seed, epoch, index)` — no global generator, nothing carried between calls — so a run is reproducible, two processes of a distributed job agree, and re-running epoch 3 gives epoch 3's meshes rather than the next ones in a stream. Scaling is isotropic on purpose: an anisotropic scale changes what a vector field *means*.
+
+**A paired sample gets one draw, replayed.** With `target_offset` or a `Target`, a sample is two meshes, and augmenting them independently would teach the model that a part rotates between one step and the next.
+
+In a spec it is a top-level block, and it is refused by name for the `srresnet` family — a grid sampled on a fixed lattice would have its own coverage changed by rotating the mesh under it:
+
+```jsonc
+"Augmentation": { "Rotation": {"Axis": "z", "MaxDegrees": 45.0},
+                  "Scale": {"Low": 0.9, "High": 1.1}, "Seed": 0 }
+```
+
+The trainer applies it to the **train** split only (a validation loss that moves because the poses moved measures nothing), calls the dataset's `set_epoch` between epochs, and records the description in the model card. Statistics are gathered un-augmented; edge norms are rotation-invariant, and a scale range only widens them slightly.
+
 ## Dataset manifests
 
 The object the adapter iterates is a [`DatasetManifest`](./datasets) — a hand-editable JSON cataloguing many cases (each possibly a time series) with splits, tags, groups and notes, curated by hand, by the [`dataset` CLI group](./cli#meshioplusplus-dataset), or by the [MCP tools](./mcp), all reading and writing the same file.

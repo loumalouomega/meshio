@@ -23,22 +23,50 @@ class MeshManifestDataset(torch.utils.data.Dataset):
     reports the recorded feature contract for the whole dataset -- it is
     deliberately not attached to each ``Data`` (a non-tensor attribute would
     muddy PyG's collate).
+
+    An ``augmentation`` draws its transform from ``(seed, epoch, index)``, so
+    ``set_epoch(e)`` -- called by the trainer between epochs -- gives every
+    sample a fresh but reproducible pose. Without that call the dataset keeps
+    returning epoch 0, which is the honest default: a silent per-access draw
+    would make two passes over the same dataset disagree.
     """
 
-    def __init__(self, manifest, *, split=None, device=None, **kwargs):
+    def __init__(
+        self,
+        manifest,
+        *,
+        split=None,
+        device=None,
+        augmentation=None,
+        epoch=0,
+        **kwargs,
+    ):
         graph_kwargs, read_kwargs = _split_kwargs(dict(kwargs))
         self._graph_kwargs = graph_kwargs
         offset = int(graph_kwargs.get("target_offset", 0))
         self._items = _flat_items(manifest, split, read_kwargs, offset)
         self._device = device
         self._schema = None
+        self._augmentation = augmentation
+        self._epoch = int(epoch)
+
+    def set_epoch(self, epoch):
+        """Advance the augmentation's draw; a no-op without one."""
+        self._epoch = int(epoch)
 
     def __len__(self):
         return len(self._items)
 
     def __getitem__(self, index):
         entry_id, series, step = self._items[index]
-        _, sample = _read_sample(series, step, self._graph_kwargs)
+        _, sample = _read_sample(
+            series,
+            step,
+            self._graph_kwargs,
+            self._augmentation,
+            self._epoch,
+            index,
+        )
         if self._schema is None:
             self._schema = sample.schema
         tensors = {

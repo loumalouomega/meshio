@@ -79,15 +79,44 @@ def test_rotate_vector_point_data():
     assert np.allclose(out2.point_data["v"], np.tile([1.0, 0.0, 0.0], (8, 1)))
 
 
+def test_rotate_vector_cell_data():
+    # A vector living on a CELL rotates exactly as one living on a point does.
+    # Before v10.33.0 the flag reached point data only and cell data rode
+    # through in the old frame -- silently, since nothing about an array says
+    # which frame it is in.
+    mesh = _cube()
+    mesh.cell_data["vel"] = [np.array([[1.0, 0.0, 0.0]])]
+    mesh.cell_data["stress"] = [np.diag([1.0, 2.0, 3.0]).reshape(1, 9)]
+    mesh.cell_data["mat"] = [np.array([7], dtype=np.int64)]
+    out = transform(mesh, rotate=("z", 90), rotate_vector_data=True)
+    assert np.allclose(out.cell_data["vel"][0][0], [0.0, 1.0, 0.0], atol=1e-12)
+    assert np.allclose(
+        out.cell_data["stress"][0][0].reshape(3, 3),
+        np.diag([2.0, 1.0, 3.0]),
+        atol=1e-12,
+    )
+    # an integer tag is never a vector
+    assert np.array_equal(out.cell_data["mat"][0], [7])
+    # and without the flag cell data is untouched
+    plain = transform(mesh, rotate=("z", 90))
+    assert np.allclose(plain.cell_data["vel"][0][0], [1.0, 0.0, 0.0])
+
+
 def test_cpp_matches_python():
     core = pytest.importorskip("meshioplusplus._core")
     mesh = _cube()
     mesh.point_data["v"] = np.tile([1.0, 2.0, 3.0], (8, 1))
+    mesh.cell_data["cv"] = [np.array([[1.0, 2.0, 3.0]])]
+    mesh.cell_data["ct"] = [np.arange(9, dtype=np.float64).reshape(1, 9)]
     mat = _build_matrix(None, None, ("z", 37.0), None, None)
     got = core.transform(mesh, mat.reshape(-1).tolist(), True)
     ref = _transform_py(mesh, mat, True)
     assert np.allclose(got.points, ref.points, atol=1e-12)
     assert np.allclose(got.point_data["v"], ref.point_data["v"], atol=1e-12)
+    # The two engines must agree on cell data as well, or a Windows CI run
+    # (which takes the numpy path) would disagree with a Linux one.
+    for name in ("cv", "ct"):
+        assert np.allclose(got.cell_data[name][0], ref.cell_data[name][0], atol=1e-12)
 
 
 def test_roundtrip_write_read(tmp_path):

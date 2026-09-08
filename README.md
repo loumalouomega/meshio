@@ -810,6 +810,8 @@ edges = mio.proximity_graph(cloud, radius=0.015, box_size=[2, 2, 2])  # periodic
 attrs = mio.edge_vectors(cloud.points, edges)                       # displacement, then its norm
 ```
 
+For a **transient** surrogate the shape is a window — the last K states of every node, oldest first — and `iter_windows` builds them in three schemes over a manifest, while `rollout` feeds a model its own predictions back and reports how the error grows, which a one-step validation loss cannot show. `Augmentation` randomizes each case's pose per epoch, drawn deterministically from `(seed, epoch, index)` and replayed coherently across a paired input and target.
+
 Once a model is trained, applying it to one mesh needs no manifest at all — `meshioplusplus predict model.mdlus part.vtu part_pred.vtu`, or `predict_file` from Python. Everything comes from the checkpoint's own model card, and a mesh carrying no truth predicts anyway rather than reporting an error against itself.
 
 The same call adds *world* edges beside a mesh's own — contact between surfaces that are near but not connected — and `bistride_hierarchy` coarsens a graph so a signal crosses the mesh in logarithmically many message-passing steps. See [proximity graphs](https://loumalouomega.github.io/meshioplusplus/proximity_graphs.html).
@@ -924,7 +926,7 @@ cmake --build build && cmake --install build --prefix /opt/meshioplusplus
 ```
 
 ```cmake
-find_package(meshioplusplus 10.32.0 EXACT CONFIG REQUIRED COMPONENTS CXX)
+find_package(meshioplusplus 10.33.0 EXACT CONFIG REQUIRED COMPONENTS CXX)
 target_link_libraries(my_solver PRIVATE meshioplusplus::core)
 ```
 

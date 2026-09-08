@@ -33,6 +33,16 @@ from .._grid_transfer import GridSpec
 from .._interop import _emit, _importable
 from .._ml import FEATURE_SCHEMA_VERSION, edge_index, feature_matrix
 from .._proximity import _graph_positions, edge_vectors, proximity_graph
+from ._augment import Augmentation
+from ._temporal import (
+    Rollout,
+    WindowSample,
+    iter_windows,
+    make_window,
+    rollout,
+    window_samples,
+    window_stats,
+)
 from ._train import TrainSpec, default_spec, load_spec
 
 __all__ = [
@@ -45,6 +55,14 @@ __all__ = [
     "grid_stats",
     "field_stats",
     "edge_stats",
+    "Augmentation",
+    "WindowSample",
+    "make_window",
+    "window_samples",
+    "iter_windows",
+    "window_stats",
+    "Rollout",
+    "rollout",
     "make_reader",
     "make_dataset",
     "to_physicsnemo",
@@ -366,7 +384,7 @@ def _flat_items(manifest, split, read_kwargs, offset=0):
     return items
 
 
-def _read_sample(series, step, graph_kwargs):
+def _read_sample(series, step, graph_kwargs, augmentation=None, epoch=0, index=0):
     """One (or two, when pairing) mesh reads -> ``(time, GraphSample)``.
 
     The single owner of the read-and-sample step, shared by
@@ -374,14 +392,22 @@ def _read_sample(series, step, graph_kwargs):
     the three cannot drift. ``TimeSeries`` caches nothing, so a paired
     sample (``target_offset >= 1``) costs exactly two reads -- **at most two
     meshes alive**, the pairing amendment to the streaming invariant.
+
+    An ``augmentation`` is drawn ONCE per sample and replayed on the target:
+    augmenting the pair independently would teach the model that a part
+    rotates between one step and the next.
     """
     offset = int(graph_kwargs.get("target_offset", 0))
     time, mesh = series[step]
     target = series[step + offset][1] if offset else None
+    if augmentation is not None and augmentation.active:
+        mesh, params = augmentation.apply(mesh, epoch=epoch, index=index)
+        if target is not None:
+            target, _ = augmentation.apply(target, params=params)
     return time, graph_sample(mesh, target_mesh=target, **graph_kwargs)
 
 
-def iter_samples(manifest, *, split=None, **kwargs):
+def iter_samples(manifest, *, split=None, augmentation=None, epoch=0, **kwargs):
     """Yield ``(entry_id, time, GraphSample)`` over a manifest's entries.
 
     A generator honouring the sequence streaming invariant: one mesh is
@@ -390,12 +416,17 @@ def iter_samples(manifest, *, split=None, **kwargs):
     step's). ``kwargs`` split into :func:`graph_sample` parameters and
     ``read()`` kwargs (``arrays=...`` narrowing, ...); ``manifest`` is a
     :class:`~meshioplusplus.DatasetManifest` or anything its ``load``
-    accepts.
+    accepts. An :class:`Augmentation` draws one transform per sample from
+    ``(seed, epoch, index)`` and replays it on a paired target.
     """
     graph_kwargs, read_kwargs = _split_kwargs(dict(kwargs))
     offset = int(graph_kwargs.get("target_offset", 0))
-    for entry_id, series, step in _flat_items(manifest, split, read_kwargs, offset):
-        time, sample = _read_sample(series, step, graph_kwargs)
+    for index, (entry_id, series, step) in enumerate(
+        _flat_items(manifest, split, read_kwargs, offset)
+    ):
+        time, sample = _read_sample(
+            series, step, graph_kwargs, augmentation, epoch, index
+        )
         yield entry_id, time, sample
 
 
@@ -1069,7 +1100,9 @@ def make_dataset(manifest, *, split=None, device=None, **kwargs):
     (``pos``/``x``/``y``/``edge_index``/``edge_attr``) over a manifest --
     what MeshGraphNet training consumes, batched natively by PyG's
     ``DataLoader``. Needs ``torch_geometric``; raises a named install error
-    otherwise. ``device=`` moves each sample's tensors on access."""
+    otherwise. ``device=`` moves each sample's tensors on access, and an
+    ``augmentation=`` :class:`Augmentation` gives every epoch a fresh but
+    reproducible pose once the trainer calls the dataset's ``set_epoch``."""
     _require_framework(
         "make_dataset", "torch_geometric", "pip install torch_geometric", doc=_DOC
     )

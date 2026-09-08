@@ -247,11 +247,24 @@ Mesh transform(const Mesh& rMesh, const AffineTransform& rXform, bool rotate_vec
             out.AddPointData(name, transform_owned_copy(a));
     }
 
-    // Cell data + field data (carried through unchanged).
+    // Cell data (optionally rotated too -- a vector living on a cell rotates
+    // exactly as one living on a point does; the block's row count is its own
+    // cell count, so each block is widened independently).
+    std::vector<std::size_t> cell_counts;
+    for (const auto cb : rMesh.CellRange())
+        cell_counts.push_back(cb.NumCells());
     for (const std::string& name : rMesh.CellDataNames()) {
         std::vector<NDArray> blocks;
-        for (std::size_t b = 0; b < rMesh.CellDataNumBlocks(name); ++b)
-            blocks.push_back(transform_owned_copy(rMesh.CellData(name, b)));
+        for (std::size_t b = 0; b < rMesh.CellDataNumBlocks(name); ++b) {
+            const NDArray& a = rMesh.CellData(name, b);
+            const std::size_t rows = b < cell_counts.size() ? cell_counts[b] : 0;
+            const std::size_t cols = rows > 0 ? a.Size() / rows : 0;
+            if (rotate_vector_data && transform_is_float(a.Dtype()) && rows > 0 &&
+                (cols == 3 || cols == 9))
+                blocks.push_back(transform_rotate_point_data(a, rows, cols, R));
+            else
+                blocks.push_back(transform_owned_copy(a));
+        }
         out.AddCellData(name, std::move(blocks));
     }
     for (const std::string& name : rMesh.FieldDataNames())

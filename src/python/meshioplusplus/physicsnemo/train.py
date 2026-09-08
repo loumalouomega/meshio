@@ -229,8 +229,20 @@ def _run_graph(spec, *, log=print) -> dict:
     write_json_atomic(os.path.join(run_dir, EDGE_STATS_FILE), e_stats)
 
     graph_kwargs = spec.graph_kwargs()
+    # Augmentation applies to the TRAIN split only: a validation loss that
+    # moves because the poses moved measures nothing.
+    augmentation = None
+    if spec.augmentation:
+        from ._augment import Augmentation
+
+        augmentation = Augmentation.from_dict(spec.augmentation)
+        log(f"augmentation: {augmentation.to_dict()}")
     train_ds = make_dataset(
-        manifest, split=spec.train_split, **graph_kwargs, **read_kwargs
+        manifest,
+        split=spec.train_split,
+        augmentation=augmentation,
+        **graph_kwargs,
+        **read_kwargs,
     )
     valid_ds = make_dataset(
         manifest, split=spec.valid_split, **graph_kwargs, **read_kwargs
@@ -398,6 +410,9 @@ def grid_card_from_run(
         "coarse": schema.get("coarse"),
         "fine": schema.get("fine"),
         "read": dict(spec.read),
+        # Informational: a checkpoint says what poses it was shown. Inference
+        # never augments, so nothing reads this back.
+        "augmentation": spec.augmentation,
         "input_normalization": {
             "mean": [float(v) for v in stats["x_mean"]],
             "std": [max(float(v), STATS_STD_FLOOR) for v in stats["x_std"]],
@@ -539,6 +554,12 @@ def _epoch_loop(
     progress = {}
     for epoch in range(spec.epochs):
         t0 = time.time()
+        # A dataset carrying an augmentation redraws its poses per epoch; the
+        # loop is shared with the grid family, which has none, so this is a
+        # capability check rather than a family branch.
+        dataset = getattr(getattr(train_loader, "dataset", None), "set_epoch", None)
+        if dataset is not None:
+            dataset(epoch)
         model.train()
         train_loss = step(train_loader, optimizer)
         valid_loss = None

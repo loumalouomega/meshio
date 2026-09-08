@@ -136,10 +136,21 @@ def _transform_py(mesh, matrix, rotate_vector_data):
             point_data[key] = value.copy()
 
     cells = [(cb.type, np.array(cb.data)) for cb in mesh.cells]
-    cell_data = {
-        k: [None if b is None else np.array(b) for b in blocks]
-        for k, blocks in mesh.cell_data.items()
-    }
+    counts = [len(cb.data) for cb in mesh.cells]
+    cell_data = {}
+    for key, blocks in mesh.cell_data.items():
+        out_blocks = []
+        for i, block in enumerate(blocks):
+            if block is None:
+                out_blocks.append(None)
+                continue
+            block = np.asarray(block)
+            rows = counts[i] if i < len(counts) else 0
+            if rotate_vector_data and rows and block.shape[:1] == (rows,):
+                out_blocks.append(_rotate_point_data(block, R, rows))
+            else:
+                out_blocks.append(np.array(block))
+        cell_data[key] = out_blocks
     field_data = {
         k: (v.copy() if isinstance(v, np.ndarray) else v)
         for k, v in mesh.field_data.items()
