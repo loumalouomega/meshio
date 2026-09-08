@@ -196,6 +196,8 @@ Like `Mesh`, the handle is released by a GC finalizer and `close` is the determi
 
 These are gaps in the **C ABI**, shared with the [Fortran](/fortran) and [R](/r) bindings; the Julia package invents no workaround for any of them:
 
+- **Four Python-only formats.** `pmsh`, `zarr`, `cae` and `usd` (v10.35.0, the physics-ML data path) are registered in the Python layer only, not in the shared C++ dispatch registry, so this surface cannot read or write them. They are export targets for a training pipeline rather than interchange formats; see [formats](/formats).
+
 - **point / cell sets beyond regions** never reach the C++ core at all;
 - the **`frozen` pin mask** of `smooth` and `decimate`;
 - **per-cell-type counts** in `stats` — use `cell_block_types` with `cell_block_info`;

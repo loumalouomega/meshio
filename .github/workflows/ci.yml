@@ -869,7 +869,7 @@ jobs:
           # NOT apply here and an unbounded `mcp` resolves 2.0.0, which removed
           # mcp.server.fastmcp. Keep the two in step.
           pip install pytest pytest-codeblocks pytest-cov h5py netCDF4 pybind11 scikit-build-core cmake ninja \
-            pyvista trimesh pyarrow pandas polars zarr "mcp<2" starlette uvicorn httpx
+            pyvista trimesh pyarrow pandas polars zarr usd-core "mcp<2" starlette uvicorn httpx
 
       # Cache the two Debug -O0 core builds (build-cpp-cov + the editable _core)
       # so re-runs reuse objects. compiler-check=content keeps hits valid across
@@ -1076,10 +1076,15 @@ jobs:
       - name: Install meshio++ with the interop and zarr extras
         run: |
           python -m pip install --upgrade pip
-          pip install ".[interop,zarr]" pytest
+          pip install ".[interop,zarr,usd]" pytest
 
       - name: Interop and ML tests
         run: python -m pytest tests/python/test_interop.py tests/python/test_gpu.py tests/python/test_ml.py -v
+
+      # The four physics-ML formats. Their pure halves already run in the
+      # default matrix; this job adds the zarr- and pxr-gated ones.
+      - name: Physics-ML format tests
+        run: python -m pytest tests/python/test_pmsh.py tests/python/test_zarr.py tests/python/test_cae.py tests/python/test_usd.py -v
 
   # --------------------------------------------------------------------------
   # The MCP server with its extra installed. The default `test` matrix keeps

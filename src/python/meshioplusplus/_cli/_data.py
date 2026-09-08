@@ -577,6 +577,125 @@ def export_dataset_cmd(args):
     return 0
 
 
+# --- data export-cae --------------------------------------------------------
+
+
+def _parse_named_value(text, flag):
+    """``name=value`` for the repeatable global-parameter flags."""
+    if "=" not in text:
+        raise ValueError(
+            f"meshio++: data export-cae: {flag} takes name=value, got {text!r}"
+        )
+    name, _, value = text.partition("=")
+    try:
+        return name.strip(), float(value)
+    except ValueError:
+        raise ValueError(
+            f"meshio++: data export-cae: {flag} value for '{name.strip()}' must "
+            f"be a number, got {value!r}"
+        ) from None
+
+
+def add_export_cae_args(parser):
+    parser.add_argument(
+        "infiles",
+        type=str,
+        nargs="+",
+        help="mesh files: several paths, or ONE quoted glob pattern "
+        "(natural-numeric ordering), or one multi-step file",
+    )
+    parser.add_argument(
+        "outdir", type=str, help="directory to write one .npz per case into"
+    )
+    parser.add_argument(
+        "--input-format",
+        "-i",
+        type=str,
+        choices=sorted(list(reader_map.keys())),
+        help="input file format",
+        default=None,
+    )
+    parser.add_argument(
+        "--surface-fields",
+        type=str,
+        default=None,
+        metavar="A,B",
+        help="comma-separated surface field names, in column order "
+        "(default: every numeric array, sorted)",
+    )
+    parser.add_argument(
+        "--volume-fields",
+        type=str,
+        default=None,
+        metavar="A,B",
+        help="comma-separated volume (nodal) field names, in column order",
+    )
+    parser.add_argument(
+        "--global",
+        dest="globals_",
+        type=str,
+        action="append",
+        default=None,
+        metavar="NAME=VALUE",
+        help="a case parameter, repeatable (e.g. --global stream_velocity=30)",
+    )
+    parser.add_argument(
+        "--global-reference",
+        type=str,
+        action="append",
+        default=None,
+        metavar="NAME=VALUE",
+        help="reference value for a case parameter, repeatable "
+        "(default: the parameter's own value)",
+    )
+    parser.add_argument(
+        "--global-order",
+        type=str,
+        default=None,
+        metavar="A,B",
+        help="stacking order of global_params_values (DoMINO is order-"
+        "sensitive); default alphabetical",
+    )
+    parser.add_argument(
+        "--name-template",
+        type=str,
+        default="case_{index}.npz",
+        help="output file name pattern (default: case_{index}.npz)",
+    )
+    parser.add_argument(
+        "--quiet", "-q", action="store_true", help="suppress the summary"
+    )
+
+
+def export_cae_cmd(args):
+    from ..cae import export_cases
+
+    source = args.infiles if len(args.infiles) > 1 else args.infiles[0]
+    params = dict(
+        _parse_named_value(text, "--global") for text in (args.globals_ or [])
+    )
+    references = dict(
+        _parse_named_value(text, "--global-reference")
+        for text in (args.global_reference or [])
+    )
+    written = export_cases(
+        source,
+        args.outdir,
+        name_template=args.name_template,
+        file_format=args.input_format,
+        # `or None` throughout: an omitted flag means "every numeric array",
+        # which is not the same request as an explicit empty list.
+        surface_fields=_split_names(args.surface_fields) or None,
+        volume_fields=_split_names(args.volume_fields) or None,
+        global_params=params or None,
+        global_params_reference=references or None,
+        global_params_order=_split_names(args.global_order) or None,
+    )
+    if not args.quiet:
+        print(f"wrote {len(written)} case(s) to {args.outdir}")
+    return 0
+
+
 # --- data gradient ---------------------------------------------------------
 
 
@@ -914,6 +1033,13 @@ _VERBS = (
         "needs `[arrow]`, `[zarr]` or h5py respectively)",
         add_export_dataset_args,
         export_dataset_cmd,
+    ),
+    (
+        "export-cae",
+        "Export a SET of meshes as one .npz per case in the CAE sample "
+        "layout PhysicsNeMo's DoMINO/Transolver datapipes read",
+        add_export_cae_args,
+        export_cae_cmd,
     ),
 )
 

@@ -1066,7 +1066,7 @@ def to_physicsnemo(mesh, *, manifold_dim="auto", float32=True):
     with the upstream ``Mesh.to(device)``.
 
     Needs ``nvidia-physicsnemo`` (no pip extra, deliberately); pin
-    ``>=2.1,<2.2`` in training projects -- ``physicsnemo.mesh`` is the
+    ``>=2.1,<2.3`` in training projects -- ``physicsnemo.mesh`` is the
     framework's newest surface. See ``doc/physicsnemo.md``.
     """
     _require_framework(

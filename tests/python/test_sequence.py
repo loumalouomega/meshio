@@ -366,16 +366,26 @@ def test_series_writers_list_agrees_with_reality(steps, tmp_path):
     # 'gid' is skipped on a build with no gidpost (needs zlib at compile time,
     # see gid/__init__.py) -- its absence here is a build configuration, not a
     # _SERIES_WRITERS/reality mismatch, which is what this gate actually checks.
+    # 'usd' is skipped without usd-core for the same reason.
+    #
+    # 'usd' also needs a real extension: pxr chooses its encoding from the
+    # suffix and refuses to author a layer named '.out' at all, so testing it
+    # with the shared name would report a failure that says nothing about this
+    # list. Every other writer is content with '.out'.
     from meshioplusplus import _core
+    from meshioplusplus._interop import _importable
 
     has_gidpost = getattr(_core, "__has_gidpost__", False)
+    suffixes = {"usd": ".usda"}
     for fmt in sorted(meshioplusplus._helpers._writer_map):
         if fmt == "gid" and not has_gidpost:
+            continue
+        if fmt == "usd" and not _importable("pxr"):
             continue
         works = True
         try:
             meshioplusplus.write_sequence(
-                str(tmp_path / f"series_{fmt}.out"),
+                str(tmp_path / f"series_{fmt}{suffixes.get(fmt, '.out')}"),
                 meshioplusplus.read_sequence(str(steps / "out_*.vtu")),
                 file_format=fmt,
             )

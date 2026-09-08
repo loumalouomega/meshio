@@ -67,7 +67,9 @@ TIME_KEY = "meshio:time"
 # `_SeriesWriter`: it pulls steps (a callable returning `(time, mesh)` or None)
 # instead of being pushed to, which is what lets a generator drive it with one
 # mesh alive.
-_SERIES_WRITERS = ("xdmf", "gid")
+# **`usd` joined in v10.35.0**: one stage carries many time samples, so a
+# fan-in is its natural shape (`usd.SeriesWriter`, pushed like XDMF's).
+_SERIES_WRITERS = ("xdmf", "gid", "usd")
 
 # The formats whose step COUNT can be discovered, so a bare `convert in.X
 # out.Y` on one of them might silently write step 0 of many. Consulted before
@@ -88,7 +90,31 @@ _SERIES_WRITERS = ("xdmf", "gid")
 # `read_gid_metadata` never opened the `.post.res` sibling where steps live, so
 # it reported one step and there was nothing here to gate on -- exactly the
 # shape of gap MED still has above.
-_TIME_CAPABLE_READERS = ("xdmf", "exodus", "gid")
+#
+# **`usd` joined in v10.35.0.** Unlike the other three its count comes from a
+# FULL read -- `read_metadata` has no native USD path, so it falls back and
+# reads the stage, whose reader attaches `mesh.time_values` (the Exodus
+# side-channel). Correct but not cheap; stated in doc/sequences.md.
+_TIME_CAPABLE_READERS = ("xdmf", "exodus", "gid", "usd")
+
+# Formats whose "file" is a DIRECTORY. A glob must keep those entries, which
+# `os.path.isfile` alone would drop -- and it is a suffix test rather than a
+# registry lookup because the plan is built before any format is resolved.
+# Deliberately narrower than "every directory": an ordinary subdirectory that
+# happens to match a pattern is still skipped. The C++ `sequence_expand` has
+# no counterpart, which costs nothing there -- these two formats are
+# Python-only and unreadable from that surface anyway.
+DIRECTORY_FORMAT_SUFFIXES = (".pmsh", ".zarr")
+
+
+def is_sample_path(path) -> bool:
+    """Whether ``path`` is one step's worth of data: a file, or a directory
+    store (see :data:`DIRECTORY_FORMAT_SUFFIXES`)."""
+    text = str(path)
+    if os.path.isfile(text):
+        return True
+    return os.path.isdir(text) and text.lower().endswith(DIRECTORY_FORMAT_SUFFIXES)
+
 
 _SEQUENCE_INPUT_KEYS = ("Pattern", "Paths", "Times", "TimeFrom")
 _SEQUENCE_DOC_KEYS = ("Mode", "Parallel", "Workers")
@@ -277,7 +303,7 @@ def _glob(pattern):
     matched = [
         os.path.join(directory, name)
         for name in names
-        if glob_match(base, name) and os.path.isfile(os.path.join(directory, name))
+        if glob_match(base, name) and is_sample_path(os.path.join(directory, name))
     ]
     matched.sort(key=_natural_sort_key)
     if not matched:
@@ -660,7 +686,19 @@ def write_sequence(path, steps, *, file_format=None, **write_kwargs):
 
     _check_series_target(path, file_format)
 
-    if _series_target_format(path, file_format) == "gid":
+    fmt = _series_target_format(path, file_format)
+
+    if fmt == "usd":
+        from .usd._usd import SeriesWriter
+
+        # Pushed, like XDMF's: one stage, one time sample per step, topology
+        # re-authored only when it changes -- so one mesh is alive at a time.
+        with SeriesWriter(path, **write_kwargs) as writer:
+            for time, mesh in steps:
+                writer.write(time, mesh)
+        return [str(path)]
+
+    if fmt == "gid":
         from . import _core
 
         # Pull, not push: gid's series writer asks for the next step, so the

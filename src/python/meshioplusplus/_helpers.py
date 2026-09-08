@@ -20,7 +20,19 @@ _writer_map = {}
 # binary/hdf5 flavours are single-file, but the buffer path cannot express a
 # flavour choice, so the format as a whole is excluded here, same as the
 # other three.
-_MULTIFILE_FORMATS = ("tetgen", "triangle", "ensight", "gid")
+#
+# "pmsh" and "zarr" are directory stores (many files under one path, the
+# `openfoam` shape) and "usd" hands its path to a pxr layer, which opens the
+# file itself -- none of the three can be given a buffer either.
+_MULTIFILE_FORMATS = (
+    "tetgen",
+    "triangle",
+    "ensight",
+    "gid",
+    "pmsh",
+    "zarr",
+    "usd",
+)
 
 
 def formats() -> dict:

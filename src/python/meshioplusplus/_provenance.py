@@ -28,6 +28,7 @@ set it before delegating to the C++ engine).
 from __future__ import annotations
 
 import enum
+import json
 import os
 import threading
 import time
@@ -564,6 +565,44 @@ def scan_provenance_text(text: str):
     return found, recognised
 
 
+def _scan_zarr_store(directory: str):
+    """The provenance block a ``zarr`` store keeps in its root attributes.
+
+    Stdlib JSON rather than the zarr API: this enriches a summary and must
+    work on a machine with no zarr installed. Consolidated metadata leaves the
+    root ``attributes`` object in place, so one file is enough.
+    """
+    meta = os.path.join(directory, "zarr.json")
+    try:
+        with open(meta, "r", encoding="utf-8") as fh:
+            attrs = json.load(fh).get("attributes") or {}
+    except (OSError, ValueError):
+        return [], False
+    block = attrs.get("meshioplusplus:provenance")
+    if not isinstance(block, list):
+        return [], False
+    return scan_provenance_text("\n".join(str(line) for line in block))
+
+
+def _scan_usd_layer(path: str):
+    """The block a USD layer keeps in its root-layer ``documentation``.
+
+    ``None`` when pxr is not installed -- the caller then falls back to the
+    byte scanner, which reaches a text ``.usda`` and not a crate layer.
+    """
+    try:
+        from pxr import Sdf
+    except Exception:
+        return None
+    try:
+        layer = Sdf.Layer.FindOrOpen(path)
+    except Exception:
+        return [], False
+    if layer is None:
+        return [], False
+    return scan_provenance_text(layer.documentation or "")
+
+
 def read_provenance_lines(path, max_bytes: int = _SCAN_BYTES):
     """Recovers the provenance block a writer left in ``path``.
 
@@ -572,6 +611,21 @@ def read_provenance_lines(path, max_bytes: int = _SCAN_BYTES):
     compiled extension when present so the two engines cannot disagree about
     what counts as a block.
     """
+    text = str(path)
+    if os.path.isdir(text):
+        # A directory store holds no head bytes to scan. `zarr` keeps the
+        # block in its root group's attributes, which are plain JSON, so this
+        # reads them without importing zarr; `pmsh` has no slot at all, and
+        # inventing a sidecar file would put a file `Mesh.load` never wrote
+        # into someone else's layout.
+        return _scan_zarr_store(text)
+    if text.lower().endswith((".usd", ".usda", ".usdc")):
+        found = _scan_usd_layer(text)
+        if found is not None:
+            return found
+        # Without pxr, fall through to the byte scanner: it finds the block in
+        # a `.usda` (text) layer and nothing in a crate one.
+
     core = _core_module()
     if core is not None:
         try:

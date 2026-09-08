@@ -74,7 +74,7 @@ By default paths are unrestricted — the server runs locally under your own acc
 
 ## Tools
 
-78 tools; the six marked *gated* need a further extra and return a named install error without it. Transforming tools take `input_path`/`output_path` (+ optional `input_format`/`output_format`, otherwise inferred from the extension) and return the written path plus a mesh summary and the operation's report.
+79 tools; the six marked *gated* need a further extra and return a named install error without it. Transforming tools take `input_path`/`output_path` (+ optional `input_format`/`output_format`, otherwise inferred from the extension) and return the written path plus a mesh summary and the operation's report.
 
 ### Inspection (read-only)
 
@@ -146,6 +146,7 @@ Jobs on the machine the server runs on (see [the dashboard](./dashboard#launchin
 |---|---|---|
 | `data_export` | `[arrow]` | data arrays → Parquet table |
 | `export_dataset` | `[arrow]` (`[zarr]`/h5py for those layouts) | a *set* of meshes → one `mesh_id`-keyed dataset (hive Parquet / zarr / hdf5; see [ML data handling](/ml)) |
+| `export_cae` | — | a *set* of meshes → one `.npz` per case in the [CAE sample layout](/formats/cae) (pure numpy, no extra) |
 | `screenshot` | `[viewer]` | off-screen PNG render, returned as MCP image content |
 | `train_start`, `train_predict`, `predict_file` | `torch_geometric` + `nvidia-physicsnemo` (no pip extra, [deliberately](physicsnemo.md#installation-deliberately-no-physicsnemo-extra)) | training and inference; the other `train_*` tools only read files and need neither |
 

@@ -112,13 +112,15 @@ Expansion is **substring replacement**, not `str.format`: an unrelated `{` in th
 
 Two different questions, answered two different ways:
 
-**Reading** — how many steps does this file have? — is **registry-derived**: `read_metadata(...).time_values`. A format whose metadata reader fills no time values has one step, which is the truthful answer for every format that cannot express time. Today **XDMF** and **Exodus** report real counts.
+**Reading** — how many steps does this file have? — is **registry-derived**: `read_metadata(...).time_values`. A format whose metadata reader fills no time values has one step, which is the truthful answer for every format that cannot express time. Today **XDMF**, **Exodus**, **GiD** and **USD** report real counts. USD's is the one that is not cheap: it has no native metadata path, so the summary comes from a full read whose reader attaches the stage's authored sample times — correct, and stated here rather than implied.
 
 > **Known gap: MED.** MED honours `time_step` in the C++ core but has no entry in `registry_metadata_readers()`, so there is no count to read and a multi-step `.med` reports one step. Probing it would cost a full read and still report one, so it is deliberately excluded from the probe list. This closes for free the moment `read_med_metadata` fills `mTimeValues` — no change to the sequence layer required.
 
-**Writing** — can this format hold N steps? — has no file to probe, so it is a small owned predicate: **XDMF only**. The anti-drift mechanism is a test rather than the table: a gtest iterates every registered writer and asserts the predicate agrees with whether a real two-step fan-in to that format actually succeeds, so a format that grows a series writer without updating the predicate turns CI red naming itself.
+**Writing** — can this format hold N steps? — has no file to probe, so it is a small owned predicate: **XDMF, GiD and USD**. A USD stage is the natural fan-in target of the three: points are time-sampled per step and topology re-authored only when it changes, so a remeshed series stays valid while a fixed-topology one stays compact. The anti-drift mechanism is a test rather than the table: a gtest iterates every registered writer and asserts the predicate agrees with whether a real two-step fan-in to that format actually succeeds, so a format that grows a series writer without updating the predicate turns CI red naming itself.
 
-**Fan-out is the answer for everything else**, which is most of the 42 formats.
+**Fan-out is the answer for everything else**, which is most of the format table.
+
+> **Directory stores in a glob.** `pmsh` and `zarr` write a *directory* per step, which an ordinary file glob would skip. `read_sequence("out_*.pmsh")` matches them anyway: a plan entry is a file, or a directory whose suffix is one of those two. Deliberately narrower than "any directory", so an unrelated subdirectory that happens to match a pattern is still ignored. The C++ `sequence_expand` has no counterpart, which costs nothing there — both formats are Python-only and unreadable from that surface.
 
 ## Never a silent truncation
 

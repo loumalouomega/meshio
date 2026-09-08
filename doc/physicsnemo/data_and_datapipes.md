@@ -55,6 +55,8 @@ meshio++ owns the step before a datapipe: turning forty-odd solver output format
 | A whole campaign as one training table | [`write_dataset`](../ml.md) — Parquet, Zarr or HDF5, one mesh alive at a time |
 | One mesh as one graph sample | [`graph_sample`](../physicsnemo.md) — `pos`, `x`, `y`, `edge_index`, edge features |
 | The tensors, on the device, with no file | [`to_torch`, `to_dlpack`](../gpu.md) |
+| A mesh in the format `MeshReader` globs for | [`pmsh`](../formats/pmsh.md) and [`zarr`](../formats/zarr.md) — the same two layouts, written in pure numpy |
+| A case in the DoMINO/Transolver sample layout | [`cae`](../formats/cae.md) — one `.npz` per case, or `data export-cae` for a whole run |
 
 The streaming invariant is a contract rather than an optimization: `read_sequence` is a generator, `write_dataset` reads one entry at a time, and `TimeSeries` holds only the plan. A dataset of a thousand transient solves never has more than one mesh in memory, which is what makes the file route practical at all.
 

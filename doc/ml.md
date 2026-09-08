@@ -125,7 +125,9 @@ dataset.zarr/                        # or dataset.h5
 └── case_1/ …
 ```
 
-Zarr needs the `[zarr]` extra (`pip install meshioplusplus[zarr]`; both zarr-python 2.x and 3.x work); HDF5 rides h5py from the `[all]` extra. **Numeric columns only**: the object-dtype `cell_type` column of a cell table is dropped with a warning — its information is in each group's `cell_types` attr — which keeps the layout clear of variable-length-string dtype portability problems.
+**Not the [`zarr` mesh format](./formats/zarr.md)**, which writes one *mesh* in PhysicsNeMo's own store layout: this is a training *table*, one subgroup per mesh, and the two are told apart by a root attribute so neither reader half-reads the other's output.
+
+Zarr needs the `[zarr]` extra (`pip install meshioplusplus[zarr]`; both zarr-python 2.x and 3.x work here, though the mesh format's writer needs 3.x); HDF5 rides h5py from the `[all]` extra. **Numeric columns only**: the object-dtype `cell_type` column of a cell table is dropped with a warning — its information is in each group's `cell_types` attr — which keeps the layout clear of variable-length-string dtype portability problems.
 
 ### CLI and MCP
 

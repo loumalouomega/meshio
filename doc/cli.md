@@ -890,8 +890,16 @@ meshioplusplus data <subcommand> [options]
 | `integrate` | Cell-measure-weighted total/mean over cells, per region (see [field integration](/field_integration)) |
 | `export` | Export the arrays to Parquet (see [interoperability](/interop)) |
 | `export-dataset` | Export a *set* of meshes as one `mesh_id`-keyed dataset (see [ML data handling](/ml)) |
+| `export-cae` | Export a *set* of meshes as one `.npz` per case in the [CAE sample layout](/formats/cae) PhysicsNeMo's DoMINO/Transolver datapipes read |
 
-Every verb takes `--input-format` (`-i`), and every verb but `info` and `integrate` takes an `OUTFILE` and `--output-format` (`-o`) — the mesh is never modified by either of those two, so there is nothing to write. `export` and `export-dataset` are the exceptions on the output side: they write Parquet / zarr / hdf5, so they take no `--output-format` (`export-dataset` has `--format parquet|zarr|hdf5` instead, plus `--mesh-id stem|index`, and its input is several paths, one quoted glob, or one multi-step file — the sequence source language). Both are **Python CLI only**; both need the matching optional extra.
+Every verb takes `--input-format` (`-i`), and every verb but `info` and `integrate` takes an `OUTFILE` and `--output-format` (`-o`) — the mesh is never modified by either of those two, so there is nothing to write. `export` and `export-dataset` are the exceptions on the output side: they write Parquet / zarr / hdf5, so they take no `--output-format` (`export-dataset` has `--format parquet|zarr|hdf5` instead, plus `--mesh-id stem|index`, and its input is several paths, one quoted glob, or one multi-step file — the sequence source language). All three are **Python CLI only**; `export` and `export-dataset` need the matching optional extra, while `export-cae` needs none — it is pure numpy.
+
+`export-cae` takes the same sequence source (several paths, one quoted glob, or one multi-step file) plus a target *directory*, and writes `case_{index}.npz` into it. `--surface-fields`/`--volume-fields` name and order the columns of the two concatenated field blocks (default: every numeric array, sorted); `--global NAME=VALUE` and `--global-reference NAME=VALUE` are repeatable case parameters and `--global-order` fixes their stacking order, which DoMINO is sensitive to. One mesh is alive at a time.
+
+```sh
+meshioplusplus data export-cae 'run_*.vtu' dataset/ \
+    --surface-fields p --global stream_velocity=30 --global-order stream_velocity
+```
 
 ::: tip `data gradient`, `data hessian`, `data estimate-error` and `data integrate` are mesh operations
 Every other verb in this group belongs to the `data_*` family, which by definition never touches geometry. `gradient` consumes and produces data arrays but **reads** geometry and topology (face areas, cell volumes, cell adjacency), so it lives in the mesh-operations layer; `hessian` is `gradient`'s companion one order further, a composition of two `gradient` calls; `estimate-error` composes `gradient` itself; `integrate` reads the same cell measures to weight its totals. All four are grouped here because that is where a user looks for them. See [field derivatives](/gradient), [second derivatives](/hessian), [error estimation](/error) and [field integration](/field_integration).

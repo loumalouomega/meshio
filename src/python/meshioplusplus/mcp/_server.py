@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Image
 
@@ -2057,6 +2057,39 @@ def _register_gated(server: FastMCP) -> None:
             location=location,
             dataset_format=dataset_format,
             mesh_id=mesh_id,
+        )
+
+    @server.tool()
+    def export_cae(
+        output_dir: str,
+        input_pattern: Optional[str] = None,
+        input_paths: Optional[List[str]] = None,
+        input_format: Optional[str] = None,
+        surface_fields: Optional[List[str]] = None,
+        volume_fields: Optional[List[str]] = None,
+        global_params: Optional[Dict[str, float]] = None,
+        global_params_reference: Optional[Dict[str, float]] = None,
+        global_params_order: Optional[List[str]] = None,
+        name_template: str = "case_{index}.npz",
+    ) -> dict:
+        """Export a SET of meshes as one .npz per case in the CAE sample
+        layout PhysicsNeMo's DoMINO/Transolver datapipes read: the
+        triangulated skin with normals and areas, the volume's nodes, the
+        named field blocks and the case's global parameters. Give exactly one
+        of input_pattern (a glob) or input_paths. Returns the files written
+        and the keys of the first one."""
+        return _guard(
+            _tools.tool_export_cae,
+            output_dir=output_dir,
+            input_pattern=input_pattern,
+            input_paths=input_paths,
+            input_format=input_format,
+            surface_fields=surface_fields,
+            volume_fields=volume_fields,
+            global_params=global_params,
+            global_params_reference=global_params_reference,
+            global_params_order=global_params_order,
+            name_template=name_template,
         )
 
     @server.tool()

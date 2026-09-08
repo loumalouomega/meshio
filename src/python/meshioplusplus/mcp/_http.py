@@ -230,6 +230,11 @@ def build_app(
             resolved = _tools._resolve(path, must_exist=True)
         except ValueError as e:
             return _error(404, str(e), "ValueError")
+        # `must_exist` also admits a directory, because two mesh formats ARE
+        # directories -- but this endpoint serves a download, so a directory
+        # is a 404 here rather than a 500 out of FileResponse.
+        if not os.path.isfile(resolved):
+            return _error(404, f"meshio++: mcp: not a file: '{resolved}'", "ValueError")
         return FileResponse(resolved, filename=os.path.basename(resolved))
 
     app.add_route("/api/health", health, methods=["GET"])

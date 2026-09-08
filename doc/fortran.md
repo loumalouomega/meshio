@@ -152,7 +152,7 @@ Handles are freed explicitly, exactly like `type(mio_mesh)`; there is no finaliz
 - `m%read(..., lenient=.true.)` — see [`doc/selective_read.md`](selective_read.md).
 - XDMF series: `s%flush()`, `s%finalized()`, and `s%create(..., mode='append', auto_flush=...)`.
 
-**Gap, deliberate:** there is no Fortran counterpart to the solver-array `write_data` overload. An array of derived types holding interop pointers is a poor fit for Fortran, and a Fortran solver already holds an `mio_mesh` handle it can `add_point_data` into before `write_data`. `MdpaInfo` is likewise absent, as for every flat binding.
+**Gap, deliberate:** four Python-only formats — `pmsh`, `zarr`, `cae` and `usd` (v10.35.0, the physics-ML data path) — are registered in the Python layer only, not in the shared C++ dispatch registry, so this surface cannot read or write them; see [formats](/formats). And there is no Fortran counterpart to the solver-array `write_data` overload. An array of derived types holding interop pointers is a poor fit for Fortran, and a Fortran solver already holds an `mio_mesh` handle it can `add_point_data` into before `write_data`. `MdpaInfo` is likewise absent, as for every flat binding.
 
 ## Sequences (transient / multi-file datasets)
 

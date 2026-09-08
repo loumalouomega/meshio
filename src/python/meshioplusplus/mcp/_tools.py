@@ -182,7 +182,10 @@ def _resolve(path, must_exist=False, for_write=False):
                 f"meshio++: mcp: path '{path}' resolves outside the configured "
                 f"root '{root}'"
             )
-    if must_exist and not os.path.isfile(resolved):
+    # A directory counts as existing: `pmsh` and `zarr` inputs ARE directories
+    # (the `openfoam` shape). A directory that is not one of those still fails,
+    # just later and with the format's own error rather than "not found".
+    if must_exist and not (os.path.isfile(resolved) or os.path.isdir(resolved)):
         raise ValueError(f"meshio++: mcp: input file not found: '{resolved}'")
     if for_write:
         parent = os.path.dirname(resolved)
@@ -575,7 +578,7 @@ def _resolve_pattern(pattern):
     containment-checked first, and every matched file then goes back through
     ``_resolve`` individually.
     """
-    from .._sequence import glob_match
+    from .._sequence import glob_match, is_sample_path
 
     raw = os.path.expanduser(str(pattern))
     # os.path.split, not a manual os.sep rpartition: on Windows os.sep is
@@ -596,7 +599,7 @@ def _resolve_pattern(pattern):
     matched = sorted(
         os.path.join(directory, name)
         for name in os.listdir(directory)
-        if glob_match(base, name) and os.path.isfile(os.path.join(directory, name))
+        if glob_match(base, name) and is_sample_path(os.path.join(directory, name))
     )
     if not matched:
         raise ValueError(f"meshio++: mcp: pattern '{pattern}' matched no files")
@@ -2649,6 +2652,71 @@ def tool_export_dataset(
     return _json_safe({"output_path": resolved_out, **manifest})
 
 
+def tool_export_cae(
+    output_dir,
+    input_pattern=None,
+    input_paths=None,
+    input_format=None,
+    surface_fields=None,
+    volume_fields=None,
+    global_params=None,
+    global_params_reference=None,
+    global_params_order=None,
+    name_template="case_{index}.npz",
+):
+    """Export a set of meshes as one .npz per case in the CAE sample layout.
+
+    The per-sample layout PhysicsNeMo's DoMINO and Transolver datapipes read:
+    the triangulated skin, its normals and areas, the volume's nodes, the
+    named field blocks and the case's global parameters. Same input shape as
+    the `sequence` tool: exactly one of input_pattern (a sandboxed glob) or
+    input_paths.
+    """
+    from ..cae import export_cases
+
+    if (input_pattern is None) == (input_paths is None):
+        raise ValueError(
+            "meshio++: mcp: give exactly one of input_pattern or input_paths"
+        )
+    if not output_dir:
+        raise ValueError("meshio++: mcp: output_dir is required")
+    if input_pattern is not None:
+        resolved_in = _resolve_pattern(input_pattern)
+    else:
+        resolved_in = [_resolve(p, must_exist=True) for p in input_paths]
+    resolved_out = _resolve(output_dir, for_write=True)
+
+    written = export_cases(
+        resolved_in,
+        resolved_out,
+        name_template=name_template,
+        file_format=input_format,
+        surface_fields=list(surface_fields) if surface_fields else None,
+        volume_fields=list(volume_fields) if volume_fields else None,
+        global_params=dict(global_params) if global_params else None,
+        global_params_reference=(
+            dict(global_params_reference) if global_params_reference else None
+        ),
+        global_params_order=(
+            list(global_params_order) if global_params_order else None
+        ),
+    )
+    keys = []
+    if written:
+        import numpy as np
+
+        with np.load(written[0]) as data:
+            keys = sorted(str(name) for name in data.files)
+    return _json_safe(
+        {
+            "output_dir": resolved_out,
+            "files": written,
+            "num_cases": len(written),
+            "keys": keys,
+        }
+    )
+
+
 def tool_screenshot(
     input_path,
     output_path,
@@ -2943,6 +3011,10 @@ TOOL_REGISTRY = OrderedDict(
         (
             "export_dataset",
             {"fn": tool_export_dataset, "wraps": ("write_dataset",), "gated": "arrow"},
+        ),
+        (
+            "export_cae",
+            {"fn": tool_export_cae, "wraps": ("cae",), "gated": None},
         ),
         (
             "screenshot",

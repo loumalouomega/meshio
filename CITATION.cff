@@ -29,6 +29,19 @@ license: MIT
 # API it calls and the R binding in bindings/r/ are all MIT. See
 # bindings/julia/LICENSE.
 #
+# The `cae` format's on-disk key layout (src/python/meshioplusplus/cae/) and
+# the `usd` writer's stage layout (src/python/meshioplusplus/usd/) are
+# transcribed from the LAYOUTS written by the Kratos Multiphysics
+# PhysicsNeMoApplication (CaeDatasetExportProcess and deployment/usd_export,
+# BSD-4-Clause with an advertising clause, Copyright (c) 2026 Vicente Mataix
+# Ferrandiz -- the same author as this project). No Kratos-typed code is
+# copied: both are re-implementations over meshio++'s own Mesh, cell blocks
+# and operations. The `pmsh` and `zarr` formats target NVIDIA PhysicsNeMo's
+# own on-disk layouts (Apache-2.0), written here in pure numpy from the
+# observed file structure and pinned against upstream's own save/load in
+# both directions. See doc/formats/cae.md, doc/formats/usd.md,
+# doc/formats/pmsh.md and doc/formats/zarr.md.
+#
 # The isotropic clustering engine behind the `remesh` operation
 # (src/cpp/src/operations/remesh.cpp) is derived from pyacvd
 # (https://github.com/pyvista/pyacvd), MIT License, Copyright (c) 2017-2024

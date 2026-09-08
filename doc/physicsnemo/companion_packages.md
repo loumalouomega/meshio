@@ -61,7 +61,7 @@ Its build pulls a Rust toolchain, which is a real installation cost for what it 
 | `physicsnemo-curator` | its Zarr/VTU AI-ready export | that pipeline is unavailable |
 | `onnxscript` | torch's ONNX exporter | export raises with an install hint |
 | `cupy` | GPU array interchange | falls back to numpy |
-| `usd-core` | OpenUSD export | that path raises |
+| `usd-core` | OpenUSD export | that path raises (meshio++'s own [`usd`](../formats/usd.md) format needs it too, via the `[usd]` extra) |
 | `tetgen` | exact boundary recovery in a tetrahedral fill | that backend raises; the default is unaffected |
 
 ## In meshio++

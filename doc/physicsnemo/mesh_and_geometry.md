@@ -70,7 +70,7 @@ Where meshio++ has a direct counterpart:
 | `boundaries` | [`extract_surface`, `extract_skin`](../extract_surface.md), and [named regions](../regions.md) for the naming |
 | `validation` | [`compute_quality`](../mesh_quality.md), [`compute_stats`](../stats.md) |
 | `primitives` | [`grid`](../voxelize.md); the rest are [on the roadmap](../roadmap.md) |
-| `.pmsh` | not supported — a roadmap item, and the one format on this list a training pipeline genuinely misses |
+| `.pmsh` | [`pmsh`](../formats/pmsh.md) (v10.35.0) — the memmap layout written in pure numpy, so a box with no torch can produce a training set; [`zarr`](../formats/zarr.md) writes the chunked alternative `MeshReader` also accepts |
 
 **Tessellation, and the thing that goes wrong.** [`convert_cells(mode="simplexify")`](../convert_cells.md) is meshio++'s answer to the simplices-only constraint: quadrilaterals fan into triangles, hexahedra into six tetrahedra by a canonical Freudenthal fan around the main diagonal 0–6, wedges into three, pyramids into two, and higher-order cells are linearized first. The diagonal is **fixed rather than chosen per cell**, which is precisely the conformity point above: two neighbouring hexahedra agree on how their shared face splits because neither of them chose.
 

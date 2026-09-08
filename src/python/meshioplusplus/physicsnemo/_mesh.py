@@ -10,8 +10,12 @@ Deliberately the thinnest possible layer: everything decidable without torch
 lives in the pure payload builders (``_to_physicsnemo_payload`` /
 ``_from_physicsnemo_payload``), and this module only wraps numpy in tensors
 and touches the tensorclass constructor + public attributes -- the narrowest
-surface of ``physicsnemo.mesh``, whose ``.pmsh`` on-disk format (self-declared
-unstable) is never touched. Pin ``nvidia-physicsnemo>=2.1,<2.2``.
+surface of ``physicsnemo.mesh``: the tensorclass constructor and its public
+attributes, never a private one. The ``.pmsh`` and Zarr on-disk layouts are
+written and read by :mod:`meshioplusplus.pmsh` and :mod:`meshioplusplus.zarr`
+instead -- in pure numpy, so a box with no torch can produce a training set --
+with parity against upstream's own ``save``/``load`` pinned in both
+directions. Pin ``nvidia-physicsnemo>=2.1,<2.3``.
 """
 
 import numpy as np

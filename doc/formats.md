@@ -10,6 +10,7 @@ Each format name links to a detailed reference page (structure, options, data ma
 | [`ansys`](./formats/ansys.md) | `.msh` | ✓ | ✓ | — |
 | [`ansysInp`](./formats/ansysinp.md) | `.cdb`, `.inp` | ✓ | ✓ | — |
 | [`avsucd`](./formats/avsucd.md) | `.avs` | ✓ | ✓ | — |
+| [`cae`](./formats/cae.md) | `.npz` | ✓ | ✓ | — |
 | [`cgns`](./formats/cgns.md) | `.cgns` | ✓ | ✓ | `h5py` |
 | [`dex`](./formats/dex.md) | `.dex` | ✓ | ✓ | — |
 | [`dolfin-xml`](./formats/dolfin.md) | `.xml` | ✓ | ✓ | — |
@@ -37,6 +38,7 @@ Each format name links to a detailed reference page (structure, options, data ma
 | [`openfoam`](./formats/openfoam.md) | `.foam` | ✓ | ✓ | — |
 | [`permas`](./formats/permas.md) | `.post`, `.post.gz`, `.dato`, `.dato.gz` | ✓ | ✓ | — |
 | [`ply`](./formats/ply.md) | `.ply` | ✓ | ✓ | — |
+| [`pmsh`](./formats/pmsh.md) | `.pmsh` | ✓ | ✓ | — |
 | [`stl`](./formats/stl.md) | `.stl` | ✓ | ✓ | — |
 | [`su2`](./formats/su2.md) | `.su2` | ✓ | ✓ | — |
 | [`svg`](./formats/svg.md) | `.svg` | — | ✓ | — |
@@ -46,12 +48,18 @@ Each format name links to a detailed reference page (structure, options, data ma
 | [`triangle`](./formats/triangle.md) | `.node` / `.ele` / `.poly` | ✓ | ✓ | — |
 | [`ugrid`](./formats/ugrid.md) | `.ugrid` | ✓ | ✓ | — |
 | [`unv`](./formats/unv.md) | `.unv` | ✓ | ✓ | — |
+| [`usd`](./formats/usd.md) | `.usd`, `.usda`, `.usdc` | ✓ | ✓ | `usd-core` |
 | [`vti`](./formats/vti.md) | `.vti` | ✓ | ✓ | — |
 | [`vtk` / `vtk42` / `vtk51`](./formats/vtk.md) | `.vtk` | ✓ | ✓ | — |
 | [`vtp`](./formats/vtp.md) | `.vtp` | ✓ | ✓ | — |
 | [`vtu`](./formats/vtu.md) | `.vtu` | ✓ | ✓ | — |
 | [`wkt`](./formats/wkt.md) | `.wkt` | ✓ | ✓ | — |
 | [`xdmf`](./formats/xdmf.md) | `.xdmf`, `.xmf` | ✓ | ✓ | `h5py` (for HDF data) |
+| [`zarr`](./formats/zarr.md) | `.zarr` | ✓ | ✓ | `zarr` (writing needs 3.x) |
+
+**Note on directory formats:** `openfoam`, [`pmsh`](./formats/pmsh.md) and [`zarr`](./formats/zarr.md) write a *directory* rather than a file. Extension dispatch still works (`case.pmsh` and `case.zarr` carry their suffix on the directory name), but a target with no extension needs an explicit `file_format=`, and none of the three can be read from or written to a buffer. A glob over such a set — `read_sequence("out_*.pmsh")` — matches them, which an ordinary file glob would not.
+
+**Note on the physics-ML formats:** [`pmsh`](./formats/pmsh.md), [`zarr`](./formats/zarr.md), [`cae`](./formats/cae.md) and [`usd`](./formats/usd.md) are **Python-only**. They are not in the shared C++ dispatch registry, so they are absent from the WASM, C, Fortran, Julia, R and native-CLI surfaces; everything else in this table is reachable from all of them. `pmsh`, `zarr` and `cae` are also *lossy by design* — each reduces a mesh to what its consumer's data model holds (one simplex kind, or a triangulated skin plus node fields) — so they are export targets rather than interchange formats.
 
 **Note on `.msh`:** `ansys`, `freefem`, and `gmsh` all use `.msh`. When writing without an explicit `file_format`, meshio++ picks `gmsh` if the mesh carries gmsh-native tags (`gmsh:physical`/`gmsh:geometrical`/`gmsh:dim_tags`) or MED-derived tags (`cell_tags`/`point_tags`/`med:*`), else falls back to the first registered candidate (`ansys`). When reading, meshio++ tries the registered formats in order and uses the first that parses the file. Specify `file_format` explicitly (e.g. `file_format="freefem"`) to avoid ambiguity either way.
 
@@ -101,6 +109,7 @@ The table below is the audit this fixed: every format's comment syntax (if any),
 | `ansys` | Section `(0 "text")` is the format's own comment section | Anywhere before `(0 ...)` sections | Yes (writer uses the `(1 "...")` program/version record, not a `(0 ...)` comment) |
 | `ansysInp` | `!` or `/` prefix | Anywhere | — |
 | `avsucd` | `#` prefix | Top of file | Yes |
+| `cae` | A bytes array written as the archive's **first** zip member; NUL-padded rows | The file's first bytes, so the ordinary head scanner finds it | Yes |
 | `cgns` | None (HDF5/CGNS binary container) — an HDF5 root attribute is the nearest equivalent | n/a | — |
 | `dex` | None — a fixed two-line header, the second ending in `#` | n/a (structural, not free text) | — |
 | `dolfin-xml` | XML `<!-- -->` | Anywhere in the document | — |
@@ -128,8 +137,10 @@ The table below is the audit this fixed: every format's comment syntax (if any),
 | `openfoam` | C-style `/* ... */`; the `FoamFile` banner's fixed-width credit cell is this writer's own convention | Top of file, inside the banner box | Yes (C++ writer only — no Python twin) |
 | `permas` | `!` prefix | Top of file | Yes |
 | `ply` | `comment ` prefix (the format's own keyword) | Anywhere in the header, before `end_header` | Yes |
+| `pmsh` | None — a memmap directory has no free-text field, and a sidecar would add a file upstream's own loader never wrote | n/a | — |
 | `stl` | Binary: an 80-byte free header slot. ASCII: none (the `solid` line names the object, not a comment) | Binary: the first 80 bytes. ASCII: none | Yes (binary only) |
 | `su2` | `%` prefix | Anywhere | — |
+| `usd` | The root layer's `documentation` metadata field | Stage metadata, at the top of a `.usda` | Yes (a binary crate layer needs `usd-core` to read it back) |
 | `svg` | XML `<!-- -->` | Anywhere in the document | — |
 | `tecplot` | None named — the `TITLE = "..."` record is the nearest free-text slot | Top of file | Yes |
 | `tetgen` | `#` prefix | Top of each file (`.node`/`.ele`/`.poly`) | Yes |
@@ -143,6 +154,7 @@ The table below is the audit this fixed: every format's comment syntax (if any),
 | `vtu` | XML `<!-- -->` | Anywhere in the document | Yes |
 | `wkt` | None (the OGC WKT grammar has no comment token) | n/a | — |
 | `xdmf` | XML `<!-- -->` | Anywhere in the document | — |
+| `zarr` | The root group's `meshioplusplus:provenance` attribute (plain JSON) | Store metadata; recovered without importing zarr | Yes |
 
 Two formats carry a related but **structurally distinct** record that this table does not count as "the tag": `med`'s `DES` mesh-description field defaults to `"Mesh created with meshio++"` (both engines agree; user-overridable, so it is data, not a fixed credit) and `unv`'s dataset-2414 field-header records always read `meshioplusplus` on five fixed ID lines (a label field the format requires, not a comment).
 

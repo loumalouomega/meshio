@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "meshioplusplus"
-version = "10.34.0"
+version = "10.35.0"
 description = "meshio++: I/O for many mesh formats (C++20 core + Python bindings)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -102,6 +102,13 @@ mcp = ["mcp>=1.2,<2"]
 # borrowed from the SDK's own dependency list. Same Python floor and same
 # NOT-in-`all` reasoning as [mcp].
 dashboard = ["mcp>=1.2,<2", "starlette>=0.27", "uvicorn>=0.31"]
+# OpenUSD, for the `usd` format (src/python/meshioplusplus/usd/). `usd-core` is
+# Pixar's self-contained PyPI build of USD -- no Omniverse install -- and it is
+# a ~30 MB wheel, so it stays out of `all` like every other interop-sized
+# extra. Its own floor is Python 3.9 while the package's is 3.8, hence the
+# marker: on 3.8 the extra resolves to nothing and the format raises its named
+# install error, which is the honest outcome either way.
+usd = ["usd-core>=24; python_version >= '3.9'"]
 all = [
     "netCDF4",
     "h5py",  # CGNS, H5M, MED, XDMF formats

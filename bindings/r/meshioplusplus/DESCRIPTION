@@ -1,7 +1,7 @@
 Package: meshioplusplus
 Type: Package
 Title: Read and Write Scientific Computing and FEM Mesh Formats
-Version: 10.34.0
+Version: 10.35.0
 Authors@R: person("Vicente", "Mataix Ferrandiz", email = "tote1989@gmail.com",
                   role = c("aut", "cre"))
 Description: Bindings to the 'meshio++' C library for reading and writing the
