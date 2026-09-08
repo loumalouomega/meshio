@@ -65,6 +65,6 @@ Several of these functionals have a meshio++ counterpart that needs no GPU, no t
 
 They are not interchangeable: the meshio++ versions run on the host over an unstructured mesh and are exact for a linear field; the physicsnemo ones run on the device over a dense lattice and are differentiable. Use the framework's when the value has to carry a gradient back to the model, and meshio++'s for everything else — including preparing the features the model is trained on, which is the common case.
 
-The neighbour and sampling functionals have **no** meshio++ counterpart yet: [`edge_index`](../ml.md) builds a graph from mesh edges or the cell dual, never from a radius or a k-nearest-neighbour search, and nothing subsamples a point cloud to a token budget. Both are [on the roadmap](../roadmap.md).
+The sampling functionals have a host-side counterpart: [`select_points`](../point_budgets.md) is exact farthest-point sampling (plus a lattice-then-farthest `"grid"` method that scales to millions of points, and a random baseline), returning indices in selection order so one budget serves every smaller one by slicing — the same job as `farthest_point_sampling`, on numpy, before anything reaches a device. The neighbour functionals still have **none**: [`edge_index`](../ml.md) builds a graph from mesh edges or the cell dual, never from a radius or a k-nearest-neighbour search; proximity graphs are [on the roadmap](../roadmap.md).
 
 Next: [Data and datapipes](./data_and_datapipes.md).

@@ -89,6 +89,7 @@ export default defineConfig({
           { text: "Isosurfaces / contours", link: "/isosurface" },
           { text: "Regular grids / voxelize", link: "/voxelize" },
           { text: "Mesh and regular grids", link: "/grids" },
+          { text: "Point-cloud budgets", link: "/point_budgets" },
           { text: "Signed distance", link: "/sdf" },
           { text: "Field derivatives", link: "/gradient" },
           { text: "Error estimation", link: "/error" },

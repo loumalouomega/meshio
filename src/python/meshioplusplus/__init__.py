@@ -129,6 +129,7 @@ from ._ml import FeatureMatrix, edge_index, feature_matrix, has_zarr, write_data
 from ._optimize_volume import optimize_volume
 from ._partition import partition, partition_labels
 from ._pipeline import run_pipeline
+from ._point_budget import PointBudget, select_points, subsample_points
 from ._quality import attach_quality, compute_quality
 from ._refine import refine
 from ._regions import Region
@@ -312,6 +313,9 @@ __all__ = [
     "squeeze_grid",
     "expand_grid",
     "power_spectrum",
+    "PointBudget",
+    "select_points",
+    "subsample_points",
     "DatasetManifest",
     "DatasetEntry",
     "to_dlpack",

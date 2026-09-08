@@ -634,6 +634,43 @@ def _register_operations(server: FastMCP) -> None:
         )
 
     @server.tool()
+    def subsample(
+        input_path: str,
+        output_path: str,
+        count: int,
+        input_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        method: str = "farthest",
+        seed: int = 0,
+        start: Optional[int] = 0,
+        bounds: Optional[List[float]] = None,
+        record_ids: bool = False,
+    ) -> dict:
+        """Reduce a mesh to a point cloud of exactly count points, so a large
+        surface fits a transformer's token budget. method is 'farthest' (exact
+        farthest-point sampling, O(N*count), the most uniform coverage), 'grid'
+        (lattice representatives then farthest-point sampling, O(N + count^2),
+        the scalable choice above a few hundred thousand points) or 'random'.
+        start is the index of the first selected point (None draws it from
+        seed); bounds (xlo, ylo, zlo, xhi, yhi, zhi) restricts the candidates to
+        a box. The output keeps the selected points, their point_data and Point
+        regions, and gets a vertex block so every format can hold it; cells and
+        cell_data are dropped. record_ids attaches budget:original_point_id."""
+        return _guard(
+            _tools.tool_subsample,
+            input_path=input_path,
+            output_path=output_path,
+            count=count,
+            input_format=input_format,
+            output_format=output_format,
+            method=method,
+            seed=seed,
+            start=start,
+            bounds=bounds,
+            record_ids=record_ids,
+        )
+
+    @server.tool()
     def compute_sdf(
         input_path: str,
         output_path: str,

@@ -27,6 +27,7 @@ from . import (
     _optimize_volume,
     _partition,
     _pipeline,
+    _point_budget,
     _quality,
     _refine,
     _regions,
@@ -191,6 +192,13 @@ def main(argv=None):
     )
     _grid_transfer.add_spectrum_args(parser)
     parser.set_defaults(func=_grid_transfer.grid_spectrum_cmd)
+
+    parser = subparsers.add_parser(
+        "subsample",
+        help="Reduce a mesh to a point cloud under a token budget (farthest-point)",
+    )
+    _point_budget.add_args(parser)
+    parser.set_defaults(func=_point_budget.subsample_cmd)
 
     parser = subparsers.add_parser(
         "sdf",

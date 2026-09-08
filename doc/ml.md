@@ -74,6 +74,8 @@ mesh = mio.gradient(mesh, "T", location="cell")       # T:gradient cell_data
 fm = mio.feature_matrix(mesh, "cell", fields=["mat", "quality:skewness"])
 ```
 
+A **token budget** composes the same way: a point-cloud model that wants 4096 tokens gets `mio.select_points(mesh, 4096).take(fm.matrix)`, the budget's rows of the full matrix with the column contract intact — see [point-cloud budgets](point_budgets.md).
+
 ## Dataset export: `write_dataset`
 
 ```python

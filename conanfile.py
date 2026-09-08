@@ -34,7 +34,7 @@ from conan.tools.files import copy
 
 class MeshioplusplusConan(ConanFile):
     name = "meshioplusplus"
-    version = "10.29.0"
+    version = "10.30.0"
     license = "MIT"
     description = "C++ core for the meshio++ mesh I/O library (installable C API)"
     homepage = "https://github.com/loumalouomega/meshioplusplus"

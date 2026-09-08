@@ -12,9 +12,9 @@ description: The 25 architecture families under physicsnemo.models, and how to p
 | Your data is | Use | What meshio++ gives you |
 |---|---|---|
 | A regular grid, same resolution in and out | FNO, AFNO, UNet | `grid`, `voxelize` and `write_vti` produce the lattice |
-| A coarse grid in, a fine grid out | SRResNet (`srrn`) | the grid data path, [on the roadmap](../roadmap.md) |
+| A coarse grid in, a fine grid out | SRResNet (`srrn`) | the [grid data path](../grids.md), a paired `Target` in the manifest, and the `srresnet` family in `TrainSpec` |
 | An unstructured mesh with connectivity | MeshGraphNet family | `graph_sample` — nodes, edges, features, targets |
-| An unordered point cloud | Transolver, FIGConvNet, FLARE | `feature_matrix` gives the node table; token budgeting is a gap |
+| An unordered point cloud | Transolver, FIGConvNet, FLARE | `feature_matrix` gives the node table, `select_points` the [token budget](../point_budgets.md) |
 | A CAD surface plus a volume (external aero) | DoMINO | `extract_surface` plus `compute_sdf` as a nodal field |
 | A time series of states | RNN, `mesh_reduced` | `TimeSeries` and the `target_offset` pairing |
 | Particles with trajectories | MeshGraphNet, VFGN | mesh edges only; proximity graphs are a gap |
@@ -99,8 +99,8 @@ A **volumetric** 3-D denoiser exists too, under `physicsnemo.experimental.models
 
 ## In meshio++
 
-Only one family is wired end to end: `MeshGraphNet`, through `TrainSpec`'s `Model.Name: "meshgraphnet"`, `graph_sample` for the tensors and `predict` for the write-back. The choice is not arbitrary — a mesh with connectivity is the shape meshio++ natively holds, and PyG batches ragged graphs of different sizes natively, which is what makes a dataset of differently-sized meshes trainable with no padding convention of its own.
+Two families are wired end to end: `MeshGraphNet`, through `TrainSpec`'s `Model.Name: "meshgraphnet"`, `graph_sample` for the tensors and `predict` for the write-back, and `SRResNet`, through `Model.Name: "srresnet"` over the [grid data path](../grids.md)'s coarse/fine pairs. The first choice is not arbitrary — a mesh with connectivity is the shape meshio++ natively holds, and PyG batches ragged graphs of different sizes natively, which is what makes a dataset of differently-sized meshes trainable with no padding convention of its own.
 
-Everything else on the chart above is reachable by hand: `feature_matrix` gives you the node table any point-cloud model wants, `to_torch`/`to_dlpack` move it to the device without a file round trip, and the model is then ordinary PyTorch. What is missing is the *dataset* half — the grid pairing for superresolution, the token budgeting for point clouds, the proximity graphs for particles. See [the roadmap](../roadmap.md).
+Everything else on the chart above is reachable by hand: `feature_matrix` gives you the node table any point-cloud model wants, `select_points` reduces it to a token budget, `to_torch`/`to_dlpack` move it to the device without a file round trip, and the model is then ordinary PyTorch. What is missing is the rest of the *dataset* half — the proximity graphs for particles, the temporal windows for a sequence model. See [the roadmap](../roadmap.md).
 
 Next: [Data and datapipes](./data_and_datapipes.md) — feeding them.

@@ -849,3 +849,47 @@ def test_cli_grid_resample_requires_exactly_one_target(grid_source, tmp_path):
         meshioplusplus._cli.main(
             ["grid-resample", str(gridfile), str(tmp_path / "x.vti")]
         )
+
+
+def test_cli_subsample_writes_a_point_cloud(tmp_path, capsys):
+    mesh = meshioplusplus.extract_surface(
+        meshioplusplus.convert_cells(meshioplusplus.grid((4, 4, 4)), mode="simplexify")
+    )
+    mesh.point_data["u"] = mesh.points[:, 0]
+    src = tmp_path / "surf.vtu"
+    meshioplusplus.write(src, mesh)
+    out = tmp_path / "cloud.vtp"
+
+    meshioplusplus._cli.main(
+        ["subsample", str(src), str(out), "--count", "20", "--record-ids"]
+    )
+    assert "subsampled 98 points to 20" in capsys.readouterr().out
+    got = meshioplusplus.read(out)
+    assert len(got.points) == 20
+    assert [cb.type for cb in got.cells] == ["vertex"]
+    ids = got.point_data["budget:original_point_id"].astype(int)
+    assert np.allclose(got.points, mesh.points[ids])
+    assert np.allclose(got.point_data["u"], mesh.point_data["u"][ids])
+
+    # --method grid, a random start and a box, all accepted
+    meshioplusplus._cli.main(
+        [
+            "subsample",
+            str(src),
+            str(out),
+            "--count",
+            "5",
+            "--method",
+            "grid",
+            "--start",
+            "random",
+            "--seed",
+            "3",
+            "--bounds=0,0,0,4,4,2",
+            "-q",
+        ]
+    )
+    got = meshioplusplus.read(out)
+    assert len(got.points) == 5 and got.points[:, 2].max() <= 2.0
+    with pytest.raises(ValueError, match="count is 1000 but only"):
+        meshioplusplus._cli.main(["subsample", str(src), str(out), "--count", "1000"])

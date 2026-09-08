@@ -1260,6 +1260,27 @@ Write grids as **`.vti`**: it stores the lattice as origin/spacing/extent and re
 
 `grid-sample` reports the **coverage**, the fraction of grid points inside the mesh — a grid around a concave domain is mostly fill, and a model trained on it learns the fill. `cell_data` is refused in both directions: convert it with `data to-point` first.
 
+## `subsample`
+
+Reduce a mesh to a point cloud of exactly `--count` points, so a large surface fits a transformer's token budget.
+
+```bash
+meshioplusplus subsample wing.stl wing_4096.vtp --count 4096                 # farthest-point sampling
+meshioplusplus subsample wing.stl wing_4096.vtp --count 4096 --method grid   # O(N + count^2), for big clouds
+meshioplusplus subsample wing.stl tip.vtp --count 512 --bounds=0.8,-1,-1,1,1,1 --record-ids
+```
+
+| flag | meaning |
+|---|---|
+| `--count N` | required; how many points to keep |
+| `--method farthest\|grid\|random` | exact farthest-point sampling (`O(N*count)`, the most uniform coverage), lattice representatives then farthest-point sampling (`O(N + count^2)`, the scalable choice above a few hundred thousand points), or a uniform draw |
+| `--start N` / `--start random` | the first selected point for `farthest`/`grid`; `random` draws it from `--seed` |
+| `--seed S` | drives `random`, and `--start random` |
+| `--bounds=xlo,...,zhi` | only points inside this box are candidates |
+| `--record-ids` | attach `budget:original_point_id`, each point's index in the source |
+
+The output keeps the selected points, their `point_data` and Point regions, and gets a `vertex` block so every format can hold it; cells, `cell_data` and Cell/Side regions are dropped with a warning naming what went. See [point-cloud budgets](point_budgets.md).
+
 See [`doc/grids.md`](grids.md).
 
 ## `sdf`

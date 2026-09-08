@@ -90,6 +90,7 @@ from .. import (
     sniff_format,
     split,
     subdivide,
+    subsample_points,
     surface_watertight_check,
     transform,
     undo_green,
@@ -1026,6 +1027,38 @@ def tool_grid_power_spectrum(input_path, field, input_format=None, max_bins=256)
             "total_power": float(ps.power.sum()),
             "grid": _grid_spec_report(array.spec),
         }
+    )
+
+
+def tool_subsample(
+    input_path,
+    output_path,
+    count,
+    input_format=None,
+    output_format=None,
+    method="farthest",
+    seed=0,
+    start=0,
+    bounds=None,
+    record_ids=False,
+):
+    """Reduce a mesh to a point cloud of exactly `count` points under a token budget."""
+    mesh = _load(input_path, input_format)
+    out = subsample_points(
+        mesh,
+        int(count),
+        method=method,
+        seed=seed,
+        start=start,
+        bounds=bounds,
+        record_ids=record_ids,
+    )
+    return _result(
+        _store(out, output_path, output_format),
+        out,
+        method=method,
+        count=int(len(out.points)),
+        num_source_points=int(len(mesh.points)),
     )
 
 
@@ -2598,6 +2631,10 @@ TOOL_REGISTRY = OrderedDict(
                 "wraps": ("power_spectrum",),
                 "gated": None,
             },
+        ),
+        (
+            "subsample",
+            {"fn": tool_subsample, "wraps": ("subsample_points",), "gated": None},
         ),
         (
             "compute_sdf",

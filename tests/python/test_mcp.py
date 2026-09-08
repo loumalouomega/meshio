@@ -462,6 +462,11 @@ _NOT_TOOLS = {
     "interpolate_grid",  # in-memory (C, M) evaluation at caller-supplied points
     "squeeze_grid",  # in-memory array reshape for a 2-D operator
     "expand_grid",
+    # A budget is a selection as an in-memory value (indices in selection
+    # order, meant to slice a feature matrix); the `subsample` tool covers the
+    # path-in/path-out case, writing the selected points as a point cloud.
+    "PointBudget",
+    "select_points",
     "has_zarr",
     "to_dlpack",
     "to_cupy",
@@ -1215,3 +1220,30 @@ def test_train_start_names_the_missing_frameworks(tmp_path, monkeypatch):
         _tools.tool_train_predict(path, checkpoint=path, output_dir=str(tmp_path / "p"))
     with pytest.raises(ValueError, match="give job_id or checkpoint"):
         _tools.tool_train_predict(path)
+
+
+def test_subsample_tool_writes_a_point_cloud_and_is_json_safe(tmp_path):
+    mesh = meshioplusplus.extract_surface(
+        meshioplusplus.convert_cells(meshioplusplus.grid((4, 4, 4)), mode="simplexify")
+    )
+    mesh.point_data["u"] = mesh.points[:, 0]
+    src = str(tmp_path / "surf.vtu")
+    meshioplusplus.write(src, mesh)
+    out = str(tmp_path / "cloud.vtu")
+
+    report = _dump(
+        _tools.tool_subsample(src, out, 16, method="grid", seed=2, record_ids=True)
+    )
+    assert report["count"] == 16 and report["num_source_points"] == 98
+    assert report["method"] == "grid"
+    assert report["cell_blocks"] == [{"type": "vertex", "num_cells": 16}]
+    assert "budget:original_point_id" in report["point_data"]
+    got = meshioplusplus.read(out)
+    ids = got.point_data["budget:original_point_id"].astype(int)
+    assert np.allclose(got.point_data["u"], mesh.point_data["u"][ids])
+
+    guarded = _tools.guard(
+        _tools.tool_subsample, input_path=src, output_path=out, count=1000
+    )
+    assert guarded["error_type"] == "ValueError"
+    assert "count is 1000 but only 98" in guarded["error"]
