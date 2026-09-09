@@ -73,6 +73,7 @@ export default defineConfig({
           { text: "GPU handoff (DLPack / CuPy)", link: "/gpu" },
           { text: "MCP server", link: "/mcp" },
           { text: "Cell conversion", link: "/convert_cells" },
+          { text: "Curved tessellation", link: "/tessellation" },
           { text: "Polyhedral refinement (subdivide)", link: "/subdivide" },
           { text: "Polyhedral coarsening (agglomerate)", link: "/agglomerate" },
           { text: "Uniform refinement", link: "/refine" },

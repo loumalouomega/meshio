@@ -9,11 +9,10 @@ exercised on a real GPU machine, not by public CI.
 
 from __future__ import annotations
 
-import numpy as np
-import pytest
-
 import meshioplusplus
 import meshioplusplus.physicsnemo as mpn
+import numpy as np
+import pytest
 from meshioplusplus import DatasetManifest, _gpu
 from meshioplusplus._mesh import Mesh
 from meshioplusplus._regions import Region
@@ -1047,3 +1046,133 @@ def test_single_mesh_prediction_names_the_missing_framework(monkeypatch):
 def test_single_mesh_prediction_is_exported():
     for name in ("predict_mesh", "predict_file"):
         assert name in mpn.__all__ and hasattr(mpn, name)
+
+
+# --------------------------------------------------------------------------- #
+# tessellation integration (Release A)                                        #
+# --------------------------------------------------------------------------- #
+def _tetra10_mesh():
+    corners = np.array([[0, 0, 0.0], [2, 0.1, 0.0], [0.1, 2.1, 0.0], [0.05, 0.05, 2.2]])
+    edges = [(0, 1), (1, 2), (0, 2), (0, 3), (1, 3), (2, 3)]
+    nodes = np.array(
+        list(corners) + [0.5 * (corners[a] + corners[b]) for a, b in edges]
+    )
+    field = np.arange(10, dtype=float)
+    return Mesh(
+        nodes, [("tetra10", np.arange(10).reshape(1, 10))], point_data={"f": field}
+    )
+
+
+def test_attach_with_tess_none_is_unchanged():
+    """`train.py`'s `_attach` pin: passing no `tess` (the default, and the
+    only way to call it before this release existed) must behave exactly
+    as it always did."""
+    from meshioplusplus.physicsnemo import train as trainer
+
+    mesh_a = _mesh()
+    mesh_b = Mesh(
+        np.asarray(mesh_a.points).copy(),
+        [(cb.type, cb.data.copy()) for cb in mesh_a.cells],
+    )
+    values = np.arange(len(mesh_a.points), dtype=float) * 3.0
+    trainer._attach(mesh_a, "node", "u_pred", values)
+    trainer._attach(mesh_b, "node", "u_pred", values, tess=None)
+    assert np.array_equal(mesh_a.point_data["u_pred"], mesh_b.point_data["u_pred"])
+
+    cell_values = np.arange(sum(len(cb) for cb in mesh_a.cells), dtype=float)
+    trainer._attach(mesh_a, "cell", "c_pred", cell_values)
+    trainer._attach(mesh_b, "cell", "c_pred", cell_values, tess=None)
+    for a, b in zip(mesh_a.cell_data["c_pred"], mesh_b.cell_data["c_pred"]):
+        assert np.array_equal(a, b)
+
+
+def test_attach_with_tess_scatters_a_node_prediction_back():
+    from meshioplusplus import tessellate
+    from meshioplusplus.physicsnemo import train as trainer
+
+    mesh = _tetra10_mesh()
+    tess = tessellate(mesh, levels=2)
+    fine_values = np.arange(len(tess.mesh.points), dtype=float)
+    out = Mesh(
+        np.asarray(mesh.points).copy(),
+        [(cb.type, cb.data.copy()) for cb in mesh.cells],
+    )
+    trainer._attach(out, "node", "p_pred", fine_values, tess=tess)
+    assert out.point_data["p_pred"].shape[0] == len(mesh.points)
+
+
+def test_graph_tessellate_spec_round_trips():
+    from meshioplusplus.physicsnemo import _train as t
+
+    doc = {
+        "Version": t.SPEC_VERSION,
+        "Manifest": "manifest.json",
+        "Fields": ["f"],
+        "TargetFields": ["f"],
+        "Graph": {"Tessellate": {"Levels": 3, "Curved": True}},
+    }
+    spec = t.spec_from_dict(doc)
+    assert spec.tessellate == {"levels": 3, "curved": True}
+    assert spec.graph_kwargs()["tessellate"] == {"levels": 3, "curved": True}
+    back = t.spec_to_dict(spec)
+    assert back["Graph"]["Tessellate"] == {"Levels": 3, "Curved": True}
+
+    # `Graph.Tessellate: true` means "every default".
+    doc["Graph"]["Tessellate"] = True
+    spec2 = t.spec_from_dict(doc)
+    assert spec2.tessellate == {}
+
+    # unknown keys refused by name, like every other spec block.
+    with pytest.raises(ValueError, match="Tessellate"):
+        t.spec_from_dict({**doc, "Graph": {"Tessellate": {"Bogus": 1}}})
+
+
+def test_graph_tessellate_absent_by_default():
+    from meshioplusplus.physicsnemo import _train as t
+
+    doc = {
+        "Version": t.SPEC_VERSION,
+        "Manifest": "manifest.json",
+        "Fields": ["f"],
+        "TargetFields": ["f"],
+    }
+    spec = t.spec_from_dict(doc)
+    assert spec.tessellate is None
+    assert spec.graph_kwargs()["tessellate"] is None
+    back = t.spec_to_dict(spec)
+    assert "Tessellate" not in back.get("Graph", {})
+
+
+def test_read_sample_tessellates_and_scopes_to_node_kind_no_regions():
+    from meshioplusplus.physicsnemo import _read_sample
+
+    mesh = _tetra10_mesh()
+    series = [(0.0, mesh)]
+    base = dict(
+        fields=["f"],
+        target_fields=None,
+        target_delta=False,
+        target_offset=0,
+        regions=False,
+        kind="node",
+        undirected=True,
+        edge_features=True,
+        float32=True,
+        proximity=None,
+        world_edges=None,
+    )
+
+    time, sample = _read_sample(series, 0, {**base, "tessellate": {"levels": 2}})
+    assert time == 0.0
+    assert (
+        sample.arrays["x"].shape[0] == sample.arrays["pos"].shape[0] > len(mesh.points)
+    )
+
+    with pytest.raises(ValueError, match="kind='node'"):
+        _read_sample(series, 0, {**base, "kind": "cell", "tessellate": True})
+    with pytest.raises(ValueError, match="regions=False"):
+        _read_sample(series, 0, {**base, "regions": True, "tessellate": True})
+
+    # tessellate=None/False is untouched -- the mesh's own point count.
+    time0, sample0 = _read_sample(series, 0, {**base, "tessellate": None})
+    assert sample0.arrays["pos"].shape[0] == len(mesh.points)

@@ -92,6 +92,16 @@ The world set stays in its own arrays because PyTorch Geometric increments any a
 
 How the edges were built is recorded in the schema, and `graph_sample_version` moved to **3** to say so: a schema stored under an earlier release now compares unequal, which is the drift guard working. A checkpoint trained on a proximity graph must not be replayed on a mesh one.
 
+### Curved-cell tessellation
+
+A curved-cell dataset (`triangle6`/`quad8`/`quad9`/`tetra10`/`hexahedron27`) feeds a GNN a linear mesh without losing its curvature via [`tessellate`](./tessellation):
+
+```python
+time, s = mpn._read_sample(series, step, {"fields": ["q"], "tessellate": True})
+```
+
+`Graph.Tessellate` is the spec key (`true` for every default, or `{"Levels": 2, "Curved": true, "Fields": true}` to narrow it), applied inside `_read_sample` before `graph_sample` ever sees the mesh, scoped to `Kind: "node"` graphs with `Graph.Regions: false` (tessellation's synthetic points carry no region membership of their own, so both are refused by name rather than silently producing an incomplete result). The resulting `Tessellation` lives only for that one sample's lifetime, matching the streaming invariant. At prediction time `predict_mesh`/`predict_file`/`_attach` take a `tess=` parameter: passing the sample's own `Tessellation` scatters/aggregates the prediction back onto the *original* mesh's own points/cells, and `tess=None` — the default — is byte-identical to every path that predated tessellation support.
+
 ### Streaming over a dataset: `iter_samples`, `field_stats`, `edge_stats`
 
 ```python
@@ -215,7 +225,8 @@ The spec is a **hand-editable settings document** — PascalCase keys, `"Version
   "Graph": { "Regions": false, "Kind": "node", "Undirected": true,
              "EdgeFeatures": true, "Float32": true,
              "TargetOffset": 0, "TargetDelta": false,     // graph_sample's own options
-             "Proximity": null },                         // or {"Method": "radius", "Radius": 0.015}
+             "Proximity": null,                           // or {"Method": "radius", "Radius": 0.015}
+             "Tessellate": null },                        // or true, or {"Levels": 2}
   "Read": {}, "Notes": null, "Tags": []
 }
 ```
@@ -256,6 +267,8 @@ Everything the prediction needs comes from the checkpoint's own **card**: which 
 `time_step` picks a step of a multi-step input and `target_path` supplies the paired mesh a t→t+n or coarse/fine checkpoint compares against. **A mesh carrying no truth predicts anyway**: the `<column>_pred` arrays are written, no `<column>_error` arrays are, and `rmse`/`max_error` come back `None`. That rule matters more than it looks — with the target fields absent, `graph_sample` would otherwise quietly take `y` from the input's own step and report an "error" of a prediction against itself.
 
 The MCP `predict_file` tool is the same function, and `predict` inherits the rule: an entry whose meshes lack the target field now predicts with a `None` rmse instead of raising.
+
+A checkpoint whose card records `Graph.Tessellate` rebuilds the same `Tessellation` from the input mesh and predicts on it, then `scatter`s/`aggregate`s the result back onto the mesh's own points/cells before writing it out — so a tessellated checkpoint's `predict_mesh`/`predict_file` call looks identical to an ordinary one from the outside.
 
 ## Superresolution: the `srresnet` family
 

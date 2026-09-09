@@ -335,6 +335,17 @@ quadratic = meshioplusplus.convert_cells(mesh, mode="elevate")
 
 Each mode is idempotent on cells it does not apply to, so it is safe on a mixed-order mesh, and output is byte-identical across mesh backends and thread counts.
 
+#### Curved tessellation
+
+**`meshioplusplus.tessellate`** isoparametrically subdivides the five higher-order cell types (`triangle6`/`quad8`/`quad9`/`tetra10`/`hexahedron27`, deliberately excluding `hexahedron20` — see `doc/tessellation.md`) onto a refinement lattice, using each cell's own shape functions so a curved boundary tessellates onto the curve rather than being chopped straight. Unlike `convert_cells(mode="simplexify")`, it records a full provenance map (`Tessellation.source_point`/`source_cell`) from every synthetic point and tessellated cell back to the higher-order cell it was carved out of, so a prediction made on a tetrahedron is written onto the hexahedron it was carved out of via `Tessellation.gather`/`.scatter`/`.aggregate`. `fields=True` (default) interpolates the input's own `point_data`/`cell_data` onto the tessellated mesh. See `doc/tessellation.md`.
+
+<!--pytest-codeblocks:skip-->
+
+```python
+tess = meshioplusplus.tessellate(mesh, levels=2)
+mp.write("curved_bracket_tessellated.vtu", tess.mesh)
+```
+
 #### Polyhedral refinement (subdivide)
 
 **`meshioplusplus.subdivide`** splits every eligible 3D cell into one polyhedral child per face, connected to a new interior point. `refine` and `decimate` both raise by name on a polyhedron, pointing at `convert_cells(mode="simplexify")` — both are built on fixed same-type subdivision templates, and an arbitrary polyhedron has none. `subdivide` needs no per-type table at all: tabulated types (reduced to corners for a quadratic variant) and existing polyhedron blocks are handled uniformly, so the same code covers every 3D cell type the mesh already supports. Automatically conforming (no closure, no hanging nodes), unlike `refine`. See `doc/subdivide.md`.
@@ -564,7 +575,7 @@ g.point_data["gradT"] = np.sqrt((grad**2).sum(axis=1))
 shells = meshioplusplus.isosurface(g, "gradT", [2.0])          # contour where T changes fastest
 ```
 
-These operations are exposed across every binding surface (Python, C API, Fortran, WASM) and as the CLI verbs `meshioplusplus quality`, `meshioplusplus extract-surface`, `meshioplusplus reorder`, `meshioplusplus diff`, `meshioplusplus merge`, `meshioplusplus transform`, `meshioplusplus clean`, `meshioplusplus crop`, `meshioplusplus slice`, `meshioplusplus split`, `meshioplusplus stats`, `meshioplusplus convert-cells`, `meshioplusplus subdivide`, `meshioplusplus agglomerate`, `meshioplusplus refine`, `meshioplusplus undo-green`, `meshioplusplus partition`, `meshioplusplus remesh`, `meshioplusplus remesh-volume`, `meshioplusplus optimize-volume`, `meshioplusplus smooth`, `meshioplusplus interpolate`, `meshioplusplus conservative-interpolate`, `meshioplusplus isosurface`, `meshioplusplus curvature`, `meshioplusplus repair`, `meshioplusplus shrinkwrap` and `meshioplusplus sobolev-deform` (plus `meshioplusplus data gradient`, `meshioplusplus data hessian`, `meshioplusplus data estimate-error` and `meshioplusplus data integrate`, mesh operations grouped under `data` because that is where a user looks for them).
+These operations are exposed across every binding surface (Python, C API, Fortran, WASM) and as the CLI verbs `meshioplusplus quality`, `meshioplusplus extract-surface`, `meshioplusplus reorder`, `meshioplusplus diff`, `meshioplusplus merge`, `meshioplusplus transform`, `meshioplusplus clean`, `meshioplusplus crop`, `meshioplusplus slice`, `meshioplusplus split`, `meshioplusplus stats`, `meshioplusplus convert-cells`, `meshioplusplus tessellate`, `meshioplusplus subdivide`, `meshioplusplus agglomerate`, `meshioplusplus refine`, `meshioplusplus undo-green`, `meshioplusplus partition`, `meshioplusplus remesh`, `meshioplusplus remesh-volume`, `meshioplusplus optimize-volume`, `meshioplusplus smooth`, `meshioplusplus interpolate`, `meshioplusplus conservative-interpolate`, `meshioplusplus isosurface`, `meshioplusplus curvature`, `meshioplusplus repair`, `meshioplusplus shrinkwrap` and `meshioplusplus sobolev-deform` (plus `meshioplusplus data gradient`, `meshioplusplus data hessian`, `meshioplusplus data estimate-error` and `meshioplusplus data integrate`, mesh operations grouped under `data` because that is where a user looks for them).
 
 #### Second derivatives (Hessian)
 
@@ -936,7 +947,7 @@ cmake --build build && cmake --install build --prefix /opt/meshioplusplus
 ```
 
 ```cmake
-find_package(meshioplusplus 10.38.0 EXACT CONFIG REQUIRED COMPONENTS CXX)
+find_package(meshioplusplus 10.39.0 EXACT CONFIG REQUIRED COMPONENTS CXX)
 target_link_libraries(my_solver PRIVATE meshioplusplus::core)
 ```
 

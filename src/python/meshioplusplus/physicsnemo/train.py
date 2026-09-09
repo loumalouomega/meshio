@@ -38,7 +38,14 @@ from .. import DatasetManifest, write
 from ..__about__ import __version__
 from .._gpu import _require_framework
 from .._regions import block_bases
-from . import _DOC, edge_stats, field_stats, graph_sample, make_dataset
+from . import (
+    _DOC,
+    _tessellate_for_sample,
+    edge_stats,
+    field_stats,
+    graph_sample,
+    make_dataset,
+)
 from ._train import (
     BEST_CHECKPOINT,
     CHECKPOINT_DIR,
@@ -713,7 +720,28 @@ def _predict_graph_mesh(loaded, mesh, target_mesh=None, label="mesh"):
         graph_kwargs["target_fields"] = None
         graph_kwargs["target_delta"] = False
 
-    sample = graph_sample(mesh, target_mesh=target_mesh, **graph_kwargs)
+    # When tessellation was used at training time (recorded in the card),
+    # rebuild it on THIS mesh before sampling -- the same isoparametric
+    # linearization the checkpoint's own x_columns/edge structure expect.
+    # The ORIGINAL mesh is what gets returned (and what a prediction is
+    # written onto): `sample_mesh` is only the tessellated stand-in
+    # `graph_sample` reads, never the caller's own mesh object.
+    orig_mesh = mesh
+    tess = None
+    tess_opt = graph_kwargs.pop("tessellate", None)
+    forward_kwargs = graph_kwargs
+    sample_mesh = mesh
+    sample_target = target_mesh
+    if tess_opt:
+        sample_mesh, tess = _tessellate_for_sample(
+            mesh, tess_opt, forward_kwargs.get("fields")
+        )
+        if target_mesh is not None:
+            sample_target, _ = _tessellate_for_sample(
+                target_mesh, tess_opt, forward_kwargs.get("target_fields")
+            )
+
+    sample = graph_sample(sample_mesh, target_mesh=sample_target, **forward_kwargs)
     if list(sample.x_columns) != list(card["x_columns"]):
         raise ValueError(
             f"{_ERR}feature drift: the checkpoint was trained on x columns "
@@ -742,9 +770,16 @@ def _predict_graph_mesh(loaded, mesh, target_mesh=None, label="mesh"):
     truth = arrays.get("y")
     truth = None if truth is None else np.asarray(truth, dtype=np.float64)
     for i, column in enumerate(y_columns):
-        _attach(mesh, kind, f"{column}_pred", pred[:, i])
+        _attach(orig_mesh, kind, f"{column}_pred", pred[:, i], tess=tess)
         if truth is not None:
-            _attach(mesh, kind, f"{column}_error", np.abs(pred[:, i] - truth[:, i]))
+            _attach(
+                orig_mesh,
+                kind,
+                f"{column}_error",
+                np.abs(pred[:, i] - truth[:, i]),
+                tess=tess,
+            )
+    mesh = orig_mesh
     error = None if truth is None else np.abs(pred - truth)
     row = {
         "num_rows": int(pred.shape[0]),
@@ -1092,7 +1127,20 @@ def _spectrum_rel_l2(pred, truth, spec):
     return float(np.sqrt(np.sum(np.square(a - b))) / denominator)
 
 
-def _attach(mesh, kind, name, values):
+def _attach(mesh, kind, name, values, tess=None):
+    """Write a per-node or per-cell array onto ``mesh``.
+
+    ``tess`` is the :class:`~meshioplusplus.Tessellation` a prediction was
+    actually computed through (or ``None``, the ordinary case): when given,
+    ``values`` are on the TESSELLATED sample's own points/cells, so they are
+    first written back onto ``mesh``'s own (pre-tessellation) points via
+    :meth:`~meshioplusplus.Tessellation.scatter` (node) or
+    :meth:`~meshioplusplus.Tessellation.aggregate` (cell) -- the map from
+    each simplex to the cell it was carved out of. With ``tess=None`` this
+    function's behaviour is byte-identical to before tessellation existed.
+    """
+    if tess is not None:
+        values = tess.scatter(values) if kind == "node" else tess.aggregate(values)[1]
     if kind == "node":
         mesh.point_data[name] = values
         return

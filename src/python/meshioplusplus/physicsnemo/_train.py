@@ -124,6 +124,7 @@ _GRAPH_KEYS = (
     "TargetOffset",
     "TargetDelta",
     "Proximity",
+    "Tessellate",
 )
 _GRID_KEYS = (
     "Resolution",
@@ -153,6 +154,11 @@ _KINDS = ("node", "cell")
 #: second edge set, and a key a run would silently ignore is exactly what the
 #: strict unknown-key refusal exists to prevent.
 _PROXIMITY_KEYS = ("Method", "Radius", "MaxNeighbors", "BoxSize")
+#: `Graph.Tessellate` -- isoparametric subdivision of curved cells before
+#: sampling (`meshioplusplus.tessellate`'s own `levels`/`curved`/`fields`
+#: vocabulary). Deliberately no `RecordStencil`: a training sample never
+#: persists the tessellation, only reads through it once per step.
+_TESSELLATE_KEYS = ("Levels", "Curved", "Fields")
 _PROXIMITY_METHODS = ("radius", "knn")
 _AGGREGATIONS = ("sum", "mean")
 _DEVICES_PREFIX = ("auto", "cpu", "cuda")
@@ -246,6 +252,45 @@ def _proximity(value, where):
     return out
 
 
+def _tessellate_spec(value, where):
+    """`Graph.Tessellate` -> the snake_case dict `_read_sample` passes to
+    `meshioplusplus.tessellate`. `true` means "tessellate with every
+    default"; an object narrows `Levels`/`Curved`/`Fields`. Validated here,
+    like `_proximity`, so a malformed value fails when the document is
+    read rather than at the first sample.
+    """
+    if value is None or value is False:
+        return None
+    if value is True:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{_ERR}{where} must be true, false or an object")
+    _check_keys(value, where, _TESSELLATE_KEYS)
+    out = {}
+    if "Levels" in value:
+        out["levels"] = _int(value["Levels"], f"{where}.Levels", 0)
+    if "Curved" in value:
+        out["curved"] = _bool(value["Curved"], f"{where}.Curved")
+    if "Fields" in value:
+        out["fields"] = _bool(value["Fields"], f"{where}.Fields")
+    return out
+
+
+def _tessellate_to_document(value):
+    """The inverse of :func:`_tessellate_spec`: snake_case back to the
+    document (always the object form, never the bare ``true`` spelling --
+    semantically identical, since an empty object also means "every
+    default")."""
+    doc = {}
+    if "levels" in value:
+        doc["Levels"] = value["levels"]
+    if "curved" in value:
+        doc["Curved"] = value["curved"]
+    if "fields" in value:
+        doc["Fields"] = value["fields"]
+    return doc
+
+
 @dataclass(frozen=True)
 class TrainSpec:
     """A training run's inputs -- the PascalCase document, typed.
@@ -286,6 +331,7 @@ class TrainSpec:
     target_offset: int = 0
     target_delta: bool = False
     proximity: Optional[Dict[str, Any]] = None
+    tessellate: Optional[Dict[str, Any]] = None
     augmentation: Optional[Dict[str, Any]] = None
     guard: Optional[Dict[str, Any]] = None
     # Grid (srresnet); resolution/cell_size are the `GridSpec.from_mesh` pair
@@ -350,6 +396,7 @@ class TrainSpec:
             "target_offset": self.target_offset,
             "target_delta": self.target_delta,
             "proximity": None if self.proximity is None else dict(self.proximity),
+            "tessellate": None if self.tessellate is None else dict(self.tessellate),
         }
 
 
@@ -553,6 +600,7 @@ def spec_from_dict(doc, *, base_dir=None) -> TrainSpec:
         target_offset=_int(graph.get("TargetOffset", 0), "Graph.TargetOffset"),
         target_delta=_bool(graph.get("TargetDelta", False), "Graph.TargetDelta"),
         proximity=_proximity(graph.get("Proximity"), "Graph.Proximity"),
+        tessellate=_tessellate_spec(graph.get("Tessellate"), "Graph.Tessellate"),
         resolution=resolution,
         cell_size=cell_size,
         bounds=bounds,
@@ -640,6 +688,8 @@ def spec_to_dict(spec: TrainSpec) -> dict:
         }
         if spec.proximity is not None:
             doc["Graph"]["Proximity"] = _proximity_to_document(spec.proximity)
+        if spec.tessellate is not None:
+            doc["Graph"]["Tessellate"] = _tessellate_to_document(spec.tessellate)
     if spec.read:
         doc["Read"] = dict(spec.read)
     if spec.augmentation is not None:

@@ -1233,6 +1233,40 @@ def _register_operations(server: FastMCP) -> None:
         )
 
     @server.tool()
+    def tessellate(
+        input_path: str,
+        output_path: str,
+        input_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        levels: int = 2,
+        curved: bool = True,
+        fields: bool = True,
+        record_stencil: bool = False,
+    ) -> dict:
+        """Isoparametric subdivision of a mesh's curved cells (quad9, quad8,
+        triangle6, tetra10, hexahedron27) onto a levels-divisions-per-axis
+        reference lattice mapped through each cell's own shape functions;
+        every other cell (linear types, hexahedron20, wedge/pyramid,
+        VTK-Lagrange, ragged/polyhedron) passes through unchanged. curved=
+        False disables curved handling entirely (a full no-op). fields=True
+        interpolates point_data/broadcasts cell_data onto the output.
+        Attaches tessellate:source_point/source_cell/sub_index provenance
+        (a synthetic point's source_point is -1); record_stencil also
+        attaches tessellate:stencil/weights so the tessellation can be
+        reconstructed (Tessellation.from_mesh) after a file round trip."""
+        return _guard(
+            _tools.tool_tessellate,
+            input_path=input_path,
+            output_path=output_path,
+            input_format=input_format,
+            output_format=output_format,
+            levels=levels,
+            curved=curved,
+            fields=fields,
+            record_stencil=record_stencil,
+        )
+
+    @server.tool()
     def subdivide(
         input_path: str,
         output_path: str,

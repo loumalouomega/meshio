@@ -33,6 +33,7 @@ from .._grid_transfer import GridSpec
 from .._interop import _emit, _importable
 from .._ml import FEATURE_SCHEMA_VERSION, edge_index, feature_matrix
 from .._proximity import _graph_positions, edge_vectors, proximity_graph
+from .._tessellation import tessellate
 from ._augment import Augmentation
 from ._temporal import (
     Rollout,
@@ -103,6 +104,7 @@ _GRAPH_KWARGS = (
     "float32",
     "proximity",
     "world_edges",
+    "tessellate",
 )
 
 
@@ -396,6 +398,17 @@ def _read_sample(series, step, graph_kwargs, augmentation=None, epoch=0, index=0
     An ``augmentation`` is drawn ONCE per sample and replayed on the target:
     augmenting the pair independently would teach the model that a part
     rotates between one step and the next.
+
+    ``tessellate`` (popped from ``graph_kwargs`` before it reaches
+    :func:`graph_sample`, which has no such parameter) isoparametrically
+    subdivides curved cells for this ONE sample -- the resulting
+    :class:`~meshioplusplus.Tessellation` lives only for the duration of
+    this call, matching the streaming invariant (the map dies with the
+    mesh, nothing is cached across samples). Scoped to ``kind="node"``
+    graphs with ``regions=False``: tessellation's synthetic points carry
+    no region membership of their own (remapping that is future work), so
+    both are refused by name rather than silently producing an incomplete
+    result.
     """
     offset = int(graph_kwargs.get("target_offset", 0))
     time, mesh = series[step]
@@ -404,7 +417,50 @@ def _read_sample(series, step, graph_kwargs, augmentation=None, epoch=0, index=0
         mesh, params = augmentation.apply(mesh, epoch=epoch, index=index)
         if target is not None:
             target, _ = augmentation.apply(target, params=params)
-    return time, graph_sample(mesh, target_mesh=target, **graph_kwargs)
+    tess_opt = graph_kwargs.get("tessellate")
+    forward_kwargs = {k: v for k, v in graph_kwargs.items() if k != "tessellate"}
+    if tess_opt:
+        if forward_kwargs.get("kind", "node") != "node":
+            raise ValueError(
+                "meshio++: physicsnemo: tessellate is only supported for "
+                "kind='node' graphs"
+            )
+        if forward_kwargs.get("regions", True):
+            raise ValueError(
+                "meshio++: physicsnemo: tessellate requires regions=False "
+                "(tessellation's synthetic points carry no region "
+                "membership of their own)"
+            )
+        mesh, _mesh_tess = _tessellate_for_sample(
+            mesh, tess_opt, forward_kwargs.get("fields")
+        )
+        if target is not None:
+            target, _ = _tessellate_for_sample(
+                target, tess_opt, forward_kwargs.get("target_fields")
+            )
+    return time, graph_sample(mesh, target_mesh=target, **forward_kwargs)
+
+
+def _tessellate_for_sample(mesh, tess_opt, field_names):
+    """Tessellate one sample's mesh, carrying the requested ``point_data``
+    fields through via :meth:`~meshioplusplus.Tessellation.gather` -- so
+    higher-order geometry linearizes for :func:`graph_sample` without
+    losing the arrays it will read. ``field_names`` is ``None`` (every
+    array, :func:`~meshioplusplus.feature_matrix`'s own default) or an
+    explicit ``fields``/``target_fields`` list. Returns ``(mesh,
+    Tessellation)`` -- the latter is what :func:`~meshioplusplus.physicsnemo.
+    train.predict_mesh` scatters a prediction back through, onto the cell
+    it was carved out of.
+    """
+    kwargs = dict(tess_opt) if isinstance(tess_opt, dict) else {}
+    kwargs.setdefault("fields", False)
+    tess = tessellate(mesh, **kwargs)
+    out = tess.mesh
+    names = field_names if field_names is not None else sorted(mesh.point_data)
+    for name in names:
+        if name in mesh.point_data:
+            out.point_data[name] = tess.gather(mesh.point_data[name])
+    return out, tess
 
 
 def iter_samples(manifest, *, split=None, augmentation=None, epoch=0, **kwargs):

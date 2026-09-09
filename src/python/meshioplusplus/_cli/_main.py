@@ -47,6 +47,7 @@ from . import (
     _split,
     _stats,
     _subdivide,
+    _tessellate,
     _transform,
     _undo_green,
     _view,
@@ -300,6 +301,17 @@ def main(argv=None):
     )
     _subdivide.add_args(parser)
     parser.set_defaults(func=_subdivide.subdivide_cmd)
+
+    parser = subparsers.add_parser(
+        "tessellate",
+        help=(
+            "Isoparametric subdivision of a mesh's curved cells (quad9, "
+            "quad8, triangle6, tetra10, hexahedron27) onto a refinement "
+            "lattice, recording tessellate:* provenance"
+        ),
+    )
+    _tessellate.add_args(parser)
+    parser.set_defaults(func=_tessellate.tessellate_cmd)
 
     parser = subparsers.add_parser(
         "agglomerate",

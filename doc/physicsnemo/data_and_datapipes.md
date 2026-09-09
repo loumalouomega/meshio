@@ -42,7 +42,7 @@ Two routes, and the difference is whether the data touches disk.
 
 Rotating a mesh must rotate its vector and rank-2 tensor fields with it. Upstream's transform defaults skip them, which quietly teaches the model that a rotated velocity field is the same velocity field — a model trained that way is not merely less accurate, it has learned a false invariance and will keep it.
 
-meshio++'s [`transform`](../transform.md) takes `rotate_vector_data=True` and does the coherent thing: `R·v` for a trailing-dimension-3 array, `R·A·Rᵀ` for a trailing-dimension-9 one. What is still missing is the *dataset wrapper* around it — the per-epoch, seeded application that makes it augmentation rather than a one-off transform. That is [on the roadmap](../roadmap.md).
+meshio++'s [`transform`](../transform.md) takes `rotate_vector_data=True` and does the coherent thing: `R·v` for a trailing-dimension-3 array, `R·A·Rᵀ` for a trailing-dimension-9 one (as of v10.33.0 it rotates `cell_data` blocks of trailing dim 3/9 too, not point_data alone). The *dataset wrapper* around it shipped in the same release: `Augmentation` draws a per-epoch, seeded transform (`random.Random(f"{seed}/{epoch}/{index}")`, a pure function of the triple) and applies the identical draw to a paired input/target so augmenting them independently never teaches the model that a part rotates between one step and the next. See [temporal windows and augmentation](../physicsnemo.md#dataset-augmentation).
 
 ## In meshio++
 

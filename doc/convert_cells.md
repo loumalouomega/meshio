@@ -66,6 +66,8 @@ Every emitted simplex is **positively oriented** for a well-oriented input, and 
 
 The numpy fallback handles rectangular cell blocks; ragged/polyhedron blocks are handled by the C++ core only.
 
+`simplexify` and `elevate` linearize/decompose a curved cell's geometry — they keep only the corner nodes, and neither carries any provenance back from a synthetic simplex to the higher-order cell it came from. [`tessellate`](/tessellation) is the curvature-aware alternative for the five higher-order types it covers (`triangle6`/`quad8`/`quad9`/`tetra10`/`hexahedron27`): it subdivides onto a refinement lattice using each cell's own isoparametric shape functions (so a curved boundary tessellates onto the curve rather than being chopped straight), interpolates fields on the way in, and records a full point/cell provenance map that `Tessellation.gather`/`.scatter`/`.aggregate` use to move data back onto the original cell — the missing half of `convert_cells(simplexify)`'s own conformity guarantee.
+
 ## CLI
 
 ```bash

@@ -19,10 +19,9 @@ tool's ``wraps`` (or consciously exempted in ``_NOT_TOOLS``).
 import json
 import os
 
+import meshioplusplus
 import numpy as np
 import pytest
-
-import meshioplusplus
 from meshioplusplus.mcp import TOOL_REGISTRY, _tools
 
 # --------------------------------------------------------------------------- #
@@ -453,6 +452,10 @@ _NOT_TOOLS = {
     "edge_index",  # in-memory (2, E) array; no path-based form
     "feature_matrix",  # in-memory matrix + schema; no path-based form
     "FeatureMatrix",
+    # An in-memory value (the mesh plus its provenance arrays); the
+    # `tessellate` tool covers the path-in/path-out case, writing the mesh
+    # with its tessellate:* arrays attached.
+    "Tessellation",
     # Grid values and the lattice they live on are in-memory arrays; the four
     # grid_* tools cover every path-in/path-out case (sample, scatter, resample,
     # spectrum).

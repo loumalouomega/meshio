@@ -172,6 +172,7 @@ from ._split import split
 from ._stats import compute_stats
 from ._subdivide import subdivide
 from ._surface import extract_surface
+from ._tessellation import Tessellation, tessellate
 from ._transform import transform
 from ._undo_green import undo_green
 from ._viewer import has_viewer, screenshot, view
@@ -262,6 +263,8 @@ __all__ = [
     "crop",
     "split",
     "convert_cells",
+    "tessellate",
+    "Tessellation",
     "subdivide",
     "agglomerate",
     "refine",

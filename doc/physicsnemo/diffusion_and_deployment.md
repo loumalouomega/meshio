@@ -48,7 +48,7 @@ Two caveats, both of which report success while being wrong. Not every operator 
 
 Nothing here is wired into meshio++, and only one piece of it is a gap worth naming.
 
-`metrics.general.power_spectrum` is the honest measure of whether a super-resolved or generated field has the *right small-scale content*, as opposed to a plausible-looking one with the high wavenumbers smoothed out — pointwise error does not see the difference. A mesh library can compute it on any lattice with nothing but an FFT, which makes it the natural companion to a grid data path. It is [on the roadmap](../roadmap.md) alongside that path.
+`metrics.general.power_spectrum` is the honest measure of whether a super-resolved or generated field has the *right small-scale content*, as opposed to a plausible-looking one with the high wavenumbers smoothed out — pointwise error does not see the difference. meshio++'s [`power_spectrum`](../grids.md) (v10.27.0) computes exactly this on any lattice with nothing but an FFT, azimuthally averaged and Parseval-exact — the natural companion to the grid data path, and the number the `srresnet` superresolution family's own `spectrum_rel_l2` training rows are reported against.
 
 For the rest, the boundary is clean: an ensemble's mean and per-point standard deviation are just two more `point_data` arrays, so anything meshio++ can write can carry them. Write the mean into the field's own name and the spread into a `<field>_std` sibling, and every viewer, every format and every downstream operation treats them as ordinary data — which is the whole reason to keep uncertainty in the mesh rather than in a framework-specific container.
 

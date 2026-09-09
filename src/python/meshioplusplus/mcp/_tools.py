@@ -89,9 +89,7 @@ from .. import (
     scatter_grid,
 )
 from .. import screenshot as _screenshot_fn
-from .. import (
-    shrinkwrap,
-)
+from .. import shrinkwrap
 from .. import slice as _slice_op
 from .. import (
     smooth,
@@ -101,6 +99,7 @@ from .. import (
     subdivide,
     subsample_points,
     surface_watertight_check,
+    tessellate,
     transform,
     undo_green,
     voxelize,
@@ -1561,6 +1560,40 @@ def tool_subdivide(
     mesh = _load(input_path, input_format)
     out = subdivide(mesh, record_parent_ids=record_parent_ids)
     return _result(_store(out, output_path, output_format), out)
+
+
+def tool_tessellate(
+    input_path,
+    output_path,
+    input_format=None,
+    output_format=None,
+    levels=2,
+    curved=True,
+    fields=True,
+    record_stencil=False,
+):
+    """Isoparametric subdivision of a mesh's curved cells (quad9, quad8,
+    triangle6, tetra10, hexahedron27) onto a refinement lattice; every
+    other cell passes through unchanged. Attaches tessellate:source_point/
+    source_cell/sub_index provenance; record_stencil also attaches
+    tessellate:stencil/weights (expensive) so the tessellation can be
+    reconstructed after a file round trip."""
+    mesh = _load(input_path, input_format)
+    tess = tessellate(
+        mesh,
+        levels=levels,
+        curved=curved,
+        fields=fields,
+        record_stencil=record_stencil,
+    )
+    return _result(
+        _store(tess.mesh, output_path, output_format),
+        tess.mesh,
+        levels=int(levels),
+        num_curved_source_cells=tess.schema["num_curved_source_cells"],
+        num_pass_through_source_cells=tess.schema["num_pass_through_source_cells"],
+        watertight=tess.schema["watertight"],
+    )
 
 
 def tool_agglomerate(
@@ -3078,6 +3111,10 @@ TOOL_REGISTRY = OrderedDict(
         (
             "convert_cells",
             {"fn": tool_convert_cells, "wraps": ("convert_cells",), "gated": None},
+        ),
+        (
+            "tessellate",
+            {"fn": tool_tessellate, "wraps": ("tessellate",), "gated": None},
         ),
         (
             "subdivide",
