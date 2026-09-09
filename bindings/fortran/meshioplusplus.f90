@@ -72,6 +72,7 @@ module meshioplusplus
     public :: mio_interpolate
     public :: mio_conservative_interpolate
     public :: mio_undo_green
+    public :: mio_shrinkwrap
     ! Length of the fixed-width string buffers the `keys` out-arguments of
     ! `split` and `data_info` use; consumers need it to declare those arrays.
     public :: STRBUF_LEN
@@ -123,6 +124,89 @@ module meshioplusplus
         integer(c_int64_t) :: num_isolated = 0
         integer(c_int64_t) :: num_degenerate = 0
         real(c_double) :: total_angle_defect = 0.0_c_double
+        integer(c_int64_t) :: reserved(4) = 0
+    end type
+
+    !> Interop mirror of C `mio_repair_opts`. Field order/types are ABI; the
+    !> defaults mirror `mio_repair_opts_init` (every pass on), which is called
+    !> anyway -- an all-zero struct is NOT the default.
+    type, bind(c) :: mio_repair_opts_t
+        integer(c_int32_t) :: fix_orientation = 1
+        integer(c_int32_t) :: orient_outward = 1
+        integer(c_int32_t) :: fill_holes = 1
+        integer(c_int32_t) :: split_non_manifold = 1
+        integer(c_int32_t) :: record_provenance = 0
+        integer(c_int32_t) :: reserved_pad = 0
+        integer(c_int64_t) :: max_hole_edges = 10
+        real(c_double) :: weld_tolerance = 0.0_c_double
+        integer(c_int64_t) :: reserved(5) = 0
+    end type
+
+    !> Interop mirror of C `mio_repair_report`. Field order/types are ABI.
+    type, bind(c) :: mio_repair_report_t
+        type(mio_surface_quality) :: quality_before
+        type(mio_surface_quality) :: quality_after
+        integer(c_int64_t) :: num_flipped = 0
+        integer(c_int64_t) :: num_components = 0
+        integer(c_int64_t) :: largest_component = 0
+        integer(c_int64_t) :: num_oriented_outward = 0
+        integer(c_int64_t) :: num_unorientable = 0
+        integer(c_int64_t) :: num_vertices_split = 0
+        integer(c_int64_t) :: num_holes_detected = 0
+        integer(c_int64_t) :: num_holes_filled = 0
+        integer(c_int64_t) :: num_holes_skipped = 0
+        integer(c_int64_t) :: num_faces_added = 0
+        integer(c_int64_t) :: num_points_added = 0
+        integer(c_int64_t) :: points_welded = 0
+        integer(c_int64_t) :: reserved(4) = 0
+    end type
+
+    !> Interop mirror of C `mio_shrinkwrap_opts`. Field order/types are ABI.
+    type, bind(c) :: mio_shrinkwrap_opts_t
+        type(c_ptr) :: weights = c_null_ptr
+        type(c_ptr) :: target_region = c_null_ptr
+        real(c_double) :: offset = 0.0_c_double
+        real(c_double) :: max_distance = 0.0_c_double
+        real(c_double) :: grid_cell_size = 0.0_c_double
+        integer(c_int32_t) :: normal_weight = 0
+        integer(c_int32_t) :: record_distance = 0
+        integer(c_int32_t) :: record_closest_cell = 0
+        integer(c_int32_t) :: reserved_pad = 0
+        integer(c_int64_t) :: reserved(5) = 0
+    end type
+
+    !> Interop mirror of C `mio_shrinkwrap_report`. Field order/types are ABI.
+    type, bind(c) :: mio_shrinkwrap_report_t
+        type(mio_surface_quality) :: quality
+        integer(c_int64_t) :: num_projected = 0
+        integer(c_int64_t) :: num_missed = 0
+        integer(c_int64_t) :: num_skipped = 0
+        real(c_double) :: max_displacement = 0.0_c_double
+        integer(c_int64_t) :: reserved(4) = 0
+    end type
+
+    !> Interop mirror of C `mio_sobolev_opts`. Field order/types are ABI.
+    type, bind(c) :: mio_sobolev_opts_t
+        type(c_ptr) :: array = c_null_ptr
+        type(c_ptr) :: fixed_points_array = c_null_ptr
+        real(c_double) :: length_scale = 0.0_c_double
+        real(c_double) :: tolerance = 1.0e-10_c_double
+        integer(c_int32_t) :: max_iterations = 128
+        integer(c_int32_t) :: fix_boundary = 0
+        integer(c_int32_t) :: record_filtered = 0
+        integer(c_int32_t) :: reserved_pad = 0
+        integer(c_int64_t) :: reserved(5) = 0
+    end type
+
+    !> Interop mirror of C `mio_sobolev_report`. Field order/types are ABI.
+    type, bind(c) :: mio_sobolev_report_t
+        integer(c_int64_t) :: num_iterations = 0
+        integer(c_int64_t) :: num_fixed = 0
+        integer(c_int64_t) :: num_isolated = 0
+        real(c_double) :: residual = 0.0_c_double
+        real(c_double) :: max_displacement = 0.0_c_double
+        integer(c_int32_t) :: converged = 0
+        integer(c_int32_t) :: reserved_pad = 0
         integer(c_int64_t) :: reserved(4) = 0
     end type
 
@@ -477,6 +561,8 @@ module meshioplusplus
         procedure :: estimate_error => mesh_estimate_error
         procedure :: remesh => mesh_remesh
         procedure :: curvature => mesh_curvature
+        procedure :: repair => mesh_repair
+        procedure :: sobolev_deform => mesh_sobolev_deform
         procedure :: remesh_volume => mesh_remesh_volume
         procedure :: split => mesh_split
         procedure :: convert_cells => mesh_convert_cells
@@ -1196,6 +1282,45 @@ module meshioplusplus
             type(c_ptr), value :: h
             type(mio_curvature_opts_t), intent(in) :: opts
             type(mio_curvature_report_t), intent(out) :: report
+            type(c_ptr) :: r
+        end function
+
+        subroutine c_mio_repair_opts_init(opts) bind(c, name="mio_repair_opts_init")
+            import :: mio_repair_opts_t
+            type(mio_repair_opts_t), intent(out) :: opts
+        end subroutine
+
+        function c_mio_repair(h, opts, report) bind(c, name="mio_repair") result(r)
+            import :: c_ptr, mio_repair_opts_t, mio_repair_report_t
+            type(c_ptr), value :: h
+            type(mio_repair_opts_t), intent(in) :: opts
+            type(mio_repair_report_t), intent(out) :: report
+            type(c_ptr) :: r
+        end function
+
+        subroutine c_mio_shrinkwrap_opts_init(opts) bind(c, name="mio_shrinkwrap_opts_init")
+            import :: mio_shrinkwrap_opts_t
+            type(mio_shrinkwrap_opts_t), intent(out) :: opts
+        end subroutine
+
+        function c_mio_shrinkwrap(h, target, opts, report) bind(c, name="mio_shrinkwrap") result(r)
+            import :: c_ptr, mio_shrinkwrap_opts_t, mio_shrinkwrap_report_t
+            type(c_ptr), value :: h, target
+            type(mio_shrinkwrap_opts_t), intent(in) :: opts
+            type(mio_shrinkwrap_report_t), intent(out) :: report
+            type(c_ptr) :: r
+        end function
+
+        subroutine c_mio_sobolev_opts_init(opts) bind(c, name="mio_sobolev_opts_init")
+            import :: mio_sobolev_opts_t
+            type(mio_sobolev_opts_t), intent(out) :: opts
+        end subroutine
+
+        function c_mio_sobolev_deform(h, opts, report) bind(c, name="mio_sobolev_deform") result(r)
+            import :: c_ptr, mio_sobolev_opts_t, mio_sobolev_report_t
+            type(c_ptr), value :: h
+            type(mio_sobolev_opts_t), intent(in) :: opts
+            type(mio_sobolev_report_t), intent(out) :: report
             type(c_ptr) :: r
         end function
 
@@ -3552,6 +3677,216 @@ contains
         if (present(degenerate_triangles)) &
             degenerate_triangles = int(report%quality%degenerate_triangles, int64)
         if (present(watertight)) watertight = (report%quality%watertight /= 0)
+        call clear_status(stat, errmsg)
+    end function
+
+    !> Repair this surface's orientation, holes and pinched vertices: weld
+    !> (opt-in) -> triangulate (blocks 1:1) -> split bowties -> orient by the
+    !> topological half-edge rule per component -> fan-fill boundary loops of
+    !> at most `max_hole_edges` edges -> orient closed components outward.
+    !> Lower-dimensional blocks ride along; fill triangles land in one
+    !> trailing `triangle` block. Every counter is an optional out-argument.
+    function mesh_repair(self, fix_orientation, orient_outward, fill_holes, &
+                         split_non_manifold, max_hole_edges, weld_tolerance, &
+                         record_provenance, num_flipped, num_components, &
+                         num_holes_detected, num_holes_filled, num_holes_skipped, &
+                         num_faces_added, num_points_added, num_vertices_split, &
+                         num_oriented_outward, num_unorientable, points_welded, &
+                         watertight_before, watertight_after, inconsistent_pairs_after, &
+                         boundary_edges_after, stat, errmsg) result(out)
+        class(mio_mesh), intent(in) :: self
+        logical, intent(in), optional :: fix_orientation, orient_outward, fill_holes
+        logical, intent(in), optional :: split_non_manifold, record_provenance
+        integer(int64), intent(in), optional :: max_hole_edges
+        real(real64), intent(in), optional :: weld_tolerance
+        integer(int64), intent(out), optional :: num_flipped, num_components
+        integer(int64), intent(out), optional :: num_holes_detected, num_holes_filled
+        integer(int64), intent(out), optional :: num_holes_skipped, num_faces_added
+        integer(int64), intent(out), optional :: num_points_added, num_vertices_split
+        integer(int64), intent(out), optional :: num_oriented_outward, num_unorientable
+        integer(int64), intent(out), optional :: points_welded
+        logical, intent(out), optional :: watertight_before, watertight_after
+        integer(int64), intent(out), optional :: inconsistent_pairs_after, boundary_edges_after
+        integer, intent(out), optional :: stat
+        character(:), allocatable, intent(out), optional :: errmsg
+        type(mio_mesh) :: out
+        type(c_ptr) :: res
+        type(mio_repair_opts_t) :: opts
+        type(mio_repair_report_t) :: report
+
+        call c_mio_repair_opts_init(opts)
+        if (present(fix_orientation)) then
+            if (.not. fix_orientation) opts%fix_orientation = 0
+        end if
+        if (present(orient_outward)) then
+            if (.not. orient_outward) opts%orient_outward = 0
+        end if
+        if (present(fill_holes)) then
+            if (.not. fill_holes) opts%fill_holes = 0
+        end if
+        if (present(split_non_manifold)) then
+            if (.not. split_non_manifold) opts%split_non_manifold = 0
+        end if
+        if (present(record_provenance)) then
+            if (record_provenance) opts%record_provenance = 1
+        end if
+        if (present(max_hole_edges)) opts%max_hole_edges = int(max_hole_edges, c_int64_t)
+        if (present(weld_tolerance)) opts%weld_tolerance = real(weld_tolerance, c_double)
+
+        res = c_mio_repair(self%handle, opts, report)
+        if (.not. c_associated(res)) then
+            call handle_failure('repair', mio_error_message(), stat, errmsg)
+            return
+        end if
+        out%handle = res
+        if (present(num_flipped)) num_flipped = int(report%num_flipped, int64)
+        if (present(num_components)) num_components = int(report%num_components, int64)
+        if (present(num_holes_detected)) num_holes_detected = int(report%num_holes_detected, int64)
+        if (present(num_holes_filled)) num_holes_filled = int(report%num_holes_filled, int64)
+        if (present(num_holes_skipped)) num_holes_skipped = int(report%num_holes_skipped, int64)
+        if (present(num_faces_added)) num_faces_added = int(report%num_faces_added, int64)
+        if (present(num_points_added)) num_points_added = int(report%num_points_added, int64)
+        if (present(num_vertices_split)) num_vertices_split = int(report%num_vertices_split, int64)
+        if (present(num_oriented_outward)) &
+            num_oriented_outward = int(report%num_oriented_outward, int64)
+        if (present(num_unorientable)) num_unorientable = int(report%num_unorientable, int64)
+        if (present(points_welded)) points_welded = int(report%points_welded, int64)
+        if (present(watertight_before)) watertight_before = (report%quality_before%watertight /= 0)
+        if (present(watertight_after)) watertight_after = (report%quality_after%watertight /= 0)
+        if (present(inconsistent_pairs_after)) &
+            inconsistent_pairs_after = int(report%quality_after%inconsistent_pairs, int64)
+        if (present(boundary_edges_after)) &
+            boundary_edges_after = int(report%quality_after%boundary_edges, int64)
+        call clear_status(stat, errmsg)
+    end function
+
+    !> Sobolev (Helmholtz-filtered) deformation: solve `(M + l^2 K) u = M d`
+    !> over this mesh's own P1 operators and move the points by `u`. `array`
+    !> names the `(n, dim)` point-data displacement; `fixed_points_array` an
+    !> optional point-data array whose nonzero entries pin their point. Every
+    !> top-dimensional block must be a linear simplex. Non-convergence is
+    !> reported through `converged`, never raised.
+    function mesh_sobolev_deform(self, array, length_scale, fixed_points_array, &
+                                 fix_boundary, record_filtered, max_iterations, &
+                                 tolerance, num_iterations, residual, converged, &
+                                 num_fixed, num_isolated, max_displacement, &
+                                 stat, errmsg) result(out)
+        class(mio_mesh), intent(in) :: self
+        character(*), intent(in) :: array
+        real(real64), intent(in) :: length_scale
+        character(*), intent(in), optional :: fixed_points_array
+        logical, intent(in), optional :: fix_boundary, record_filtered
+        integer, intent(in), optional :: max_iterations
+        real(real64), intent(in), optional :: tolerance
+        integer(int64), intent(out), optional :: num_iterations, num_fixed, num_isolated
+        real(real64), intent(out), optional :: residual, max_displacement
+        logical, intent(out), optional :: converged
+        integer, intent(out), optional :: stat
+        character(:), allocatable, intent(out), optional :: errmsg
+        type(mio_mesh) :: out
+        type(c_ptr) :: res
+        type(mio_sobolev_opts_t) :: opts
+        type(mio_sobolev_report_t) :: report
+        character(kind=c_char, len=STRBUF_LEN), target :: array_buf, fixed_buf
+
+        call c_mio_sobolev_opts_init(opts)
+        array_buf = trim(array)//c_null_char
+        opts%array = c_loc(array_buf(1:1))
+        opts%length_scale = real(length_scale, c_double)
+        if (present(fixed_points_array)) then
+            fixed_buf = trim(fixed_points_array)//c_null_char
+            opts%fixed_points_array = c_loc(fixed_buf(1:1))
+        end if
+        if (present(fix_boundary)) then
+            if (fix_boundary) opts%fix_boundary = 1
+        end if
+        if (present(record_filtered)) then
+            if (record_filtered) opts%record_filtered = 1
+        end if
+        if (present(max_iterations)) opts%max_iterations = int(max_iterations, c_int32_t)
+        if (present(tolerance)) opts%tolerance = real(tolerance, c_double)
+
+        res = c_mio_sobolev_deform(self%handle, opts, report)
+        if (.not. c_associated(res)) then
+            call handle_failure('sobolev_deform', mio_error_message(), stat, errmsg)
+            return
+        end if
+        out%handle = res
+        if (present(num_iterations)) num_iterations = int(report%num_iterations, int64)
+        if (present(num_fixed)) num_fixed = int(report%num_fixed, int64)
+        if (present(num_isolated)) num_isolated = int(report%num_isolated, int64)
+        if (present(residual)) residual = real(report%residual, real64)
+        if (present(max_displacement)) max_displacement = real(report%max_displacement, real64)
+        if (present(converged)) converged = (report%converged /= 0)
+        call clear_status(stat, errmsg)
+    end function
+
+    !> Project every (selected) point of `mesh` onto the surface of `target`:
+    !> `x' = x + w (p + offset n - x)`, one projection, no iteration. Every
+    !> point of the source moves whatever cells it carries; only the target
+    !> must be a surface. `weights` names a point-data array on the source
+    !> (nonzero selects, a float value blends); `normal_weight` is 'angle'
+    !> (default) or 'area'. Module-level like `mio_interpolate`: two meshes in.
+    function mio_shrinkwrap(mesh, target, offset, max_distance, weights, target_region, &
+                            normal_weight, record_distance, record_closest_cell, &
+                            num_projected, num_missed, num_skipped, max_displacement, &
+                            target_watertight, stat, errmsg) result(out)
+        type(mio_mesh), intent(in) :: mesh, target
+        real(real64), intent(in), optional :: offset, max_distance
+        character(*), intent(in), optional :: weights, target_region, normal_weight
+        logical, intent(in), optional :: record_distance, record_closest_cell
+        integer(int64), intent(out), optional :: num_projected, num_missed, num_skipped
+        real(real64), intent(out), optional :: max_displacement
+        logical, intent(out), optional :: target_watertight
+        integer, intent(out), optional :: stat
+        character(:), allocatable, intent(out), optional :: errmsg
+        type(mio_mesh) :: out
+        type(c_ptr) :: res
+        type(mio_shrinkwrap_opts_t) :: opts
+        type(mio_shrinkwrap_report_t) :: report
+        character(kind=c_char, len=STRBUF_LEN), target :: weights_buf, region_buf
+
+        call c_mio_shrinkwrap_opts_init(opts)
+        if (present(offset)) opts%offset = real(offset, c_double)
+        if (present(max_distance)) opts%max_distance = real(max_distance, c_double)
+        if (present(weights)) then
+            weights_buf = trim(weights)//c_null_char
+            opts%weights = c_loc(weights_buf(1:1))
+        end if
+        if (present(target_region)) then
+            region_buf = trim(target_region)//c_null_char
+            opts%target_region = c_loc(region_buf(1:1))
+        end if
+        if (present(normal_weight)) then
+            if (trim(normal_weight) == 'area') then
+                opts%normal_weight = 1
+            else if (trim(normal_weight) == 'angle') then
+                opts%normal_weight = 0
+            else
+                call handle_failure('shrinkwrap', &
+                    "meshio++: shrinkwrap: unknown normal weight '"//trim(normal_weight)// &
+                    "' (expected 'angle' or 'area')", stat, errmsg)
+                return
+            end if
+        end if
+        if (present(record_distance)) then
+            if (record_distance) opts%record_distance = 1
+        end if
+        if (present(record_closest_cell)) then
+            if (record_closest_cell) opts%record_closest_cell = 1
+        end if
+
+        res = c_mio_shrinkwrap(mesh%handle, target%handle, opts, report)
+        if (.not. c_associated(res)) then
+            call handle_failure('shrinkwrap', mio_error_message(), stat, errmsg)
+            return
+        end if
+        out%handle = res
+        if (present(num_projected)) num_projected = int(report%num_projected, int64)
+        if (present(num_missed)) num_missed = int(report%num_missed, int64)
+        if (present(num_skipped)) num_skipped = int(report%num_skipped, int64)
+        if (present(max_displacement)) max_displacement = real(report%max_displacement, real64)
+        if (present(target_watertight)) target_watertight = (report%quality%watertight /= 0)
         call clear_status(stat, errmsg)
     end function
 

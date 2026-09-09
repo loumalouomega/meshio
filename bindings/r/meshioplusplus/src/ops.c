@@ -352,6 +352,120 @@ SEXP R_mio_compute_curvature(SEXP mesh, SEXP mean, SEXP gaussian, SEXP dual_area
     return res;
 }
 
+SEXP R_mio_repair(SEXP mesh, SEXP fix_orientation, SEXP orient_outward, SEXP fill_holes,
+                  SEXP split_non_manifold, SEXP max_hole_edges, SEXP weld_tolerance,
+                  SEXP record_provenance) {
+    mio_repair_opts opts;
+    mio_repair_report report;
+    mio_mesh *out;
+
+    mio_repair_opts_init(&opts);
+    opts.fix_orientation = mio_r_bool(fix_orientation, "fix_orientation") ? 1 : 0;
+    opts.orient_outward = mio_r_bool(orient_outward, "orient_outward") ? 1 : 0;
+    opts.fill_holes = mio_r_bool(fill_holes, "fill_holes") ? 1 : 0;
+    opts.split_non_manifold = mio_r_bool(split_non_manifold, "split_non_manifold") ? 1 : 0;
+    opts.max_hole_edges = (int64_t)mio_r_double(max_hole_edges, "max_hole_edges");
+    opts.weld_tolerance = mio_r_double(weld_tolerance, "weld_tolerance");
+    opts.record_provenance = mio_r_bool(record_provenance, "record_provenance") ? 1 : 0;
+
+    out = mio_repair(mio_r_mesh(mesh), &opts, &report);
+    if (out == NULL) mio_r_fail("repair");
+    SEXP mo = PROTECT(mio_r_wrap_mesh(out));
+    SEXP qb = PROTECT(quality_list(&report.quality_before));
+    SEXP qa = PROTECT(quality_list(&report.quality_after));
+    /* R has no native int64, so the counters come back as doubles. */
+    const int64_t counters[] = {report.num_flipped,        report.num_components,
+                                report.largest_component,  report.num_oriented_outward,
+                                report.num_unorientable,   report.num_vertices_split,
+                                report.num_holes_detected, report.num_holes_filled,
+                                report.num_holes_skipped,  report.num_faces_added,
+                                report.num_points_added,   report.points_welded};
+    const char *names[] = {"mesh", "quality_before", "quality_after", "num_flipped",
+                           "num_components", "largest_component", "num_oriented_outward",
+                           "num_unorientable", "num_vertices_split", "num_holes_detected",
+                           "num_holes_filled", "num_holes_skipped", "num_faces_added",
+                           "num_points_added", "points_welded"};
+    SEXP values[15];
+    values[0] = mo;
+    values[1] = qb;
+    values[2] = qa;
+    for (int k = 0; k < 12; ++k) values[3 + k] = PROTECT(Rf_ScalarReal((double)counters[k]));
+    SEXP res = PROTECT(mio_r_named_list(15, names, values));
+    UNPROTECT(16);
+    return res;
+}
+
+SEXP R_mio_shrinkwrap(SEXP mesh, SEXP target, SEXP offset, SEXP max_distance, SEXP weights,
+                      SEXP target_region, SEXP normal_weight, SEXP record_distance,
+                      SEXP record_closest_cell) {
+    mio_shrinkwrap_opts opts;
+    mio_shrinkwrap_report report;
+    mio_mesh *out;
+
+    mio_shrinkwrap_opts_init(&opts);
+    opts.offset = mio_r_double(offset, "offset");
+    opts.max_distance = mio_r_double(max_distance, "max_distance");
+    opts.weights = mio_r_opt_string(weights);
+    opts.target_region = mio_r_opt_string(target_region);
+    const char *nw = mio_r_opt_string(normal_weight);
+    if (nw != NULL && strcmp(nw, "area") == 0) {
+        opts.normal_weight = MIO_SDF_WEIGHT_AREA;
+    } else if (nw != NULL && strcmp(nw, "angle") != 0) {
+        Rf_error("meshio++: shrinkwrap: unknown normal weight '%s' (expected 'angle' or 'area')",
+                 nw);
+    }
+    opts.record_distance = mio_r_bool(record_distance, "record_distance") ? 1 : 0;
+    opts.record_closest_cell = mio_r_bool(record_closest_cell, "record_closest_cell") ? 1 : 0;
+
+    out = mio_shrinkwrap(mio_r_mesh(mesh), mio_r_mesh(target), &opts, &report);
+    if (out == NULL) mio_r_fail("shrinkwrap");
+    SEXP mo = PROTECT(mio_r_wrap_mesh(out));
+    SEXP q = PROTECT(quality_list(&report.quality));
+    SEXP np = PROTECT(Rf_ScalarReal((double)report.num_projected));
+    SEXP nm = PROTECT(Rf_ScalarReal((double)report.num_missed));
+    SEXP ns = PROTECT(Rf_ScalarReal((double)report.num_skipped));
+    SEXP md = PROTECT(Rf_ScalarReal(report.max_displacement));
+    const char *names[] = {"mesh", "quality", "num_projected", "num_missed", "num_skipped",
+                           "max_displacement"};
+    SEXP values[] = {mo, q, np, nm, ns, md};
+    SEXP res = PROTECT(mio_r_named_list(6, names, values));
+    UNPROTECT(7);
+    return res;
+}
+
+SEXP R_mio_sobolev_deform(SEXP mesh, SEXP array, SEXP length_scale, SEXP fixed_points_array,
+                          SEXP fix_boundary, SEXP record_filtered, SEXP max_iterations,
+                          SEXP tolerance) {
+    mio_sobolev_opts opts;
+    mio_sobolev_report report;
+    mio_mesh *out;
+
+    mio_sobolev_opts_init(&opts);
+    opts.array = mio_r_opt_string(array);
+    opts.length_scale = mio_r_double(length_scale, "length_scale");
+    opts.fixed_points_array = mio_r_opt_string(fixed_points_array);
+    opts.fix_boundary = mio_r_bool(fix_boundary, "fix_boundary") ? 1 : 0;
+    opts.record_filtered = mio_r_bool(record_filtered, "record_filtered") ? 1 : 0;
+    opts.max_iterations = mio_r_int(max_iterations, "max_iterations");
+    opts.tolerance = mio_r_double(tolerance, "tolerance");
+
+    out = mio_sobolev_deform(mio_r_mesh(mesh), &opts, &report);
+    if (out == NULL) mio_r_fail("sobolev_deform");
+    SEXP mo = PROTECT(mio_r_wrap_mesh(out));
+    SEXP ni = PROTECT(Rf_ScalarReal((double)report.num_iterations));
+    SEXP rs = PROTECT(Rf_ScalarReal(report.residual));
+    SEXP cv = PROTECT(Rf_ScalarLogical(report.converged != 0));
+    SEXP nf = PROTECT(Rf_ScalarReal((double)report.num_fixed));
+    SEXP nis = PROTECT(Rf_ScalarReal((double)report.num_isolated));
+    SEXP md = PROTECT(Rf_ScalarReal(report.max_displacement));
+    const char *names[] = {"mesh", "num_iterations", "residual", "converged", "num_fixed",
+                           "num_isolated", "max_displacement"};
+    SEXP values[] = {mo, ni, rs, cv, nf, nis, md};
+    SEXP res = PROTECT(mio_r_named_list(7, names, values));
+    UNPROTECT(8);
+    return res;
+}
+
 /* --- combining / comparing ---------------------------------------------- */
 
 SEXP R_mio_merge(SEXP meshes, SEXP weld, SEXP atol, SEXP source_tag, SEXP data_policy,

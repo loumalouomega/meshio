@@ -81,6 +81,7 @@ from .. import (
     remesh,
     remesh_volume,
     reorder,
+    repair,
     resample_grid,
     run_pipeline,
     sample_distance,
@@ -88,10 +89,14 @@ from .. import (
     scatter_grid,
 )
 from .. import screenshot as _screenshot_fn
+from .. import (
+    shrinkwrap,
+)
 from .. import slice as _slice_op
 from .. import (
     smooth,
     sniff_format,
+    sobolev_deform,
     split,
     subdivide,
     subsample_points,
@@ -1318,6 +1323,146 @@ def tool_curvature(
         num_degenerate=int(report["num_degenerate"]),
         total_angle_defect=float(report["total_angle_defect"]),
         quality=report["quality"],
+    )
+
+
+def tool_repair(
+    input_path,
+    output_path,
+    input_format=None,
+    output_format=None,
+    fix_orientation=True,
+    orient_outward=True,
+    fill_holes=True,
+    split_non_manifold=True,
+    max_hole_edges=10,
+    weld_tolerance=0.0,
+    record_provenance=False,
+):
+    """Repair a surface mesh's orientation, holes and pinched vertices -- the
+    three defects `clean` does not touch. Triangles are rewound so neighbours
+    agree (by the topological half-edge rule, exact across any crease),
+    boundary loops of at most max_hole_edges edges are fan-filled consistently
+    with the surrounding surface, bowtie vertices are duplicated, and closed
+    components are oriented outward. Reports both surfaces' defect counts, so
+    what was fixed and what remains are both visible."""
+    mesh = _load(input_path, input_format)
+    out, report = repair(
+        mesh,
+        fix_orientation=fix_orientation,
+        orient_outward=orient_outward,
+        fill_holes=fill_holes,
+        split_non_manifold=split_non_manifold,
+        max_hole_edges=max_hole_edges,
+        weld_tolerance=weld_tolerance,
+        record_provenance=record_provenance,
+        return_report=True,
+    )
+    return _result(
+        _store(out, output_path, output_format),
+        out,
+        quality_before=report["quality_before"],
+        quality_after=report["quality_after"],
+        num_flipped=int(report["num_flipped"]),
+        num_components=int(report["num_components"]),
+        largest_component=int(report["largest_component"]),
+        num_oriented_outward=int(report["num_oriented_outward"]),
+        num_unorientable=int(report["num_unorientable"]),
+        num_vertices_split=int(report["num_vertices_split"]),
+        num_holes_detected=int(report["num_holes_detected"]),
+        num_holes_filled=int(report["num_holes_filled"]),
+        num_holes_skipped=int(report["num_holes_skipped"]),
+        num_faces_added=int(report["num_faces_added"]),
+        num_points_added=int(report["num_points_added"]),
+        points_welded=int(report["points_welded"]),
+    )
+
+
+def tool_shrinkwrap(
+    input_path,
+    target_path,
+    output_path,
+    input_format=None,
+    target_format=None,
+    output_format=None,
+    offset=0.0,
+    max_distance=0.0,
+    weights="",
+    target_region="",
+    normal_weight="angle",
+    record_distance=False,
+    record_closest_cell=False,
+):
+    """Project every (selected) point of the input mesh onto the surface of
+    the target: one projection, no iteration, optionally offset along the hit
+    feature's pseudonormal. Every point of the source moves whatever cells it
+    carries; only the target must be a surface. A point farther than
+    max_distance is left alone and counted."""
+    mesh = _load(input_path, input_format)
+    target = _load(target_path, target_format)
+    out, report = shrinkwrap(
+        mesh,
+        target,
+        offset=offset,
+        max_distance=max_distance,
+        weights=weights or None,
+        target_region=target_region,
+        normal_weight=normal_weight,
+        record_distance=record_distance,
+        record_closest_cell=record_closest_cell,
+        return_report=True,
+    )
+    return _result(
+        _store(out, output_path, output_format),
+        out,
+        num_projected=int(report["num_projected"]),
+        num_missed=int(report["num_missed"]),
+        num_skipped=int(report["num_skipped"]),
+        max_displacement=float(report["max_displacement"]),
+        quality=report["quality"],
+    )
+
+
+def tool_sobolev_deform(
+    input_path,
+    output_path,
+    array,
+    length_scale,
+    input_format=None,
+    output_format=None,
+    fixed_points_array="",
+    fix_boundary=False,
+    record_filtered=False,
+    max_iterations=128,
+    tolerance=1e-10,
+):
+    """Sobolev (Helmholtz-filtered) deformation: smooth a raw per-point
+    displacement field through the mesh's own P1 finite-element operators and
+    move the points by the result -- a low-pass filter whose cutoff wavelength
+    is length_scale, which turns a jagged displacement into one a mesh can
+    follow without tangling. Every top-dimensional block must be a linear
+    simplex. Non-convergence is reported, never raised."""
+    mesh = _load(input_path, input_format)
+    out, report = sobolev_deform(
+        mesh,
+        array,
+        length_scale,
+        fixed_points=fixed_points_array or None,
+        fix_boundary=fix_boundary,
+        record_filtered=record_filtered,
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+        return_report=True,
+    )
+    return _result(
+        _store(out, output_path, output_format),
+        out,
+        num_iterations=int(report["num_iterations"]),
+        residual=float(report["residual"]),
+        converged=bool(report["converged"]),
+        num_fixed=int(report["num_fixed"]),
+        num_isolated=int(report["num_isolated"]),
+        max_displacement=float(report["max_displacement"]),
     )
 
 
@@ -2857,6 +3002,15 @@ TOOL_REGISTRY = OrderedDict(
         (
             "curvature",
             {"fn": tool_curvature, "wraps": ("compute_curvature",), "gated": None},
+        ),
+        ("repair", {"fn": tool_repair, "wraps": ("repair",), "gated": None}),
+        (
+            "shrinkwrap",
+            {"fn": tool_shrinkwrap, "wraps": ("shrinkwrap",), "gated": None},
+        ),
+        (
+            "sobolev_deform",
+            {"fn": tool_sobolev_deform, "wraps": ("sobolev_deform",), "gated": None},
         ),
         (
             "estimate_error",

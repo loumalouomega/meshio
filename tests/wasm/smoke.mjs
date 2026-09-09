@@ -990,6 +990,157 @@ step('computeCurvature is reachable as a convertSurfaceOps pipeline step', () =>
     assert.ok(Math.abs(out.steps[0].totalAngleDefect - 4 * Math.PI) < 1e-9);
 });
 
+step('repair rewinds, fills and splits a surface', () => {
+    // The cube's skin (quads) triangulated, with two facets flipped: repair
+    // rewinds exactly those and the output is watertight, no point added.
+    const skin = m.convertCells(m.extractSurface(cube), 'simplexify');
+    const conn = Array.from(skin.cells[0].data);
+    const broken = conn.slice();
+    for (const t of [0, 4]) {
+        const tmp = broken[t * 3 + 1];
+        broken[t * 3 + 1] = broken[t * 3 + 2];
+        broken[t * 3 + 2] = tmp;
+    }
+    const bad = {
+        points: skin.points,
+        dim: 3,
+        cells: [{ type: 'triangle', data: new Int32Array(broken), nodesPerCell: 3 }],
+    };
+    const out = m.repair(bad);
+    assert.ok(out.qualityBefore.inconsistentPairs > 0);
+    assert.equal(out.qualityAfter.inconsistentPairs, 0);
+    assert.equal(out.qualityAfter.watertight, true);
+    assert.equal(out.numFlipped, 2);
+    assert.equal(out.numComponents, 1);
+    assert.equal(out.numHolesDetected, 0);
+    assert.equal(out.mesh.points.length, skin.points.length);
+
+    // Drop one facet: the hole is filled by a centroid fan in a trailing block.
+    const holed = {
+        points: skin.points,
+        dim: 3,
+        cells: [{ type: 'triangle', data: new Int32Array(conn.slice(3)), nodesPerCell: 3 }],
+    };
+    const filled = m.repair(holed);
+    assert.equal(filled.numHolesFilled, 1);
+    assert.equal(filled.numFacesAdded, 3);
+    assert.equal(filled.numPointsAdded, 1);
+    assert.equal(filled.qualityAfter.watertight, true);
+    assert.equal(filled.mesh.cells.length, 2);
+    const open = m.repair(holed, true, true, false);
+    assert.equal(open.numHolesDetected, 0);
+    assert.equal(open.qualityAfter.boundaryEdges, 3);
+    // A volume input is refused by name.
+    assert.throws(() => m.repair(cube), /extract_surface/);
+});
+
+step('repair is reachable as a convertSurfaceOps pipeline step', () => {
+    const skin = m.convertCells(m.extractSurface(cube), 'simplexify');
+    m.writeMesh('/rep.vtu', skin);
+    const out = m.convertSurfaceOps('/rep.vtu', '/rep.vtp', [{ op: 'repair' }]);
+    assert.equal(out.steps[0].op, 'repair');
+    assert.equal(out.steps[0].numFlipped, 0);
+});
+
+step('shrinkwrap projects points onto a target surface', () => {
+    // A z = 0 square as the target; three points land at exactly z = offset,
+    // one deselected by an integer weights array.
+    const target = {
+        points: new Float64Array([0, 0, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0]),
+        dim: 3,
+        cells: [{ type: 'triangle', data: new Int32Array([0, 1, 2, 0, 2, 3]), nodesPerCell: 3 }],
+    };
+    const cloud = {
+        points: new Float64Array([1, 1, 0.5, 2, 2, -0.7, 3, 1, 1.5]),
+        dim: 3,
+        cells: [{ type: 'vertex', data: new Int32Array([0, 1, 2]), nodesPerCell: 1 }],
+        point_data: { pick: new Float64Array([1, 0, 1]) },
+    };
+    const out = m.shrinkwrap(cloud, target, 0.25, 0, 'pick', '', 'angle', true, false);
+    assert.equal(out.numProjected, 2);
+    assert.equal(out.numSkipped, 1);
+    assert.equal(out.quality.boundaryEdges, 4);
+    const p = out.mesh.points;
+    assert.ok(Math.abs(p[2] - 0.25) < 1e-14);
+    assert.ok(Math.abs(p[5] + 0.7) < 1e-14); // unselected: untouched
+    assert.ok(Math.abs(p[8] - 0.25) < 1e-14);
+    assert.ok('shrinkwrap:distance' in out.mesh.point_data);
+    // An unknown normal weight is refused by name.
+    assert.throws(() => m.shrinkwrap(cloud, target, 0, 0, '', '', 'nope'));
+    // A volume target is refused by name.
+    assert.throws(() => m.shrinkwrap(cloud, cube), /extract_surface/);
+});
+
+step('sobolevDeform filters a displacement field', () => {
+    // A 3x3 triangle grid with a checkerboard z-displacement: the filter damps
+    // it, an array-pinned corner does not move, and a constant field is
+    // preserved exactly in zero iterations.
+    const n = 4;
+    const pts = [];
+    const disp = [];
+    for (let j = 0; j < n; ++j)
+        for (let i = 0; i < n; ++i) {
+            pts.push(i, j, 0);
+            disp.push(0, 0, (i + j) % 2 === 1 ? 0.1 : -0.1);
+        }
+    const conn = [];
+    for (let j = 0; j < n - 1; ++j)
+        for (let i = 0; i < n - 1; ++i) {
+            const a = j * n + i;
+            conn.push(a, a + 1, a + n + 1, a, a + n + 1, a + n);
+        }
+    const pin = new Float64Array(n * n);
+    pin[0] = 1;
+    const grid = {
+        points: new Float64Array(pts),
+        dim: 3,
+        cells: [{ type: 'triangle', data: new Int32Array(conn), nodesPerCell: 3 }],
+        point_data: { d: new Float64Array(disp), pin },
+        point_data_components: { d: 3 },
+    };
+    const out = m.sobolevDeform(grid, 'd', 2.0, 'pin', false, true);
+    assert.equal(out.converged, true);
+    assert.ok(out.numIterations > 0);
+    assert.equal(out.numFixed, 1);
+    assert.equal(out.numIsolated, 0);
+    assert.ok(out.maxDisplacement > 0 && out.maxDisplacement < 0.1);
+    assert.equal(out.mesh.points[2], 0); // the pinned corner
+    assert.ok('sobolev:displacement' in out.mesh.point_data);
+    // A constant field with nothing pinned: exact, zero iterations.
+    const flat = new Float64Array(n * n * 3);
+    for (let k = 0; k < n * n; ++k) flat[k * 3 + 1] = 0.4;
+    grid.point_data.c = flat;
+    grid.point_data_components.c = 3;
+    const moved = m.sobolevDeform(grid, 'c', 2.0);
+    assert.equal(moved.numIterations, 0);
+    for (let k = 0; k < n * n; ++k)
+        assert.equal(moved.mesh.points[k * 3 + 1], grid.points[k * 3 + 1] + 0.4);
+    // A missing array is refused by name, and so is a non-simplex block (the
+    // array check runs first, so the hex mesh needs the array to reach it).
+    assert.throws(() => m.sobolevDeform(grid, 'missing', 1.0), /no point_data array/);
+    const hex = {
+        ...cube,
+        point_data: { d: new Float64Array(cube.points.length) },
+        point_data_components: { d: 3 },
+    };
+    assert.throws(() => m.sobolevDeform(hex, 'd', 1.0), /simplexify/);
+});
+
+step('sobolevDeform is reachable as a convertSurfaceOps pipeline step', () => {
+    const skin = m.convertCells(m.extractSurface(cube), 'simplexify');
+    const npts = skin.points.length / 3;
+    const d = new Float64Array(npts * 3);
+    for (let k = 0; k < npts; ++k) d[k * 3 + 2] = k % 2 ? 0.05 : -0.05;
+    skin.point_data = { ...(skin.point_data || {}), d };
+    skin.point_data_components = { ...(skin.point_data_components || {}), d: 3 };
+    m.writeMesh('/sobo.vtu', skin);
+    const out = m.convertSurfaceOps('/sobo.vtu', '/sobo.vtp', [
+        { op: 'sobolevDeform', array: 'd', lengthScale: 0.5 },
+    ]);
+    assert.equal(out.steps[0].op, 'sobolevDeform');
+    assert.equal(out.steps[0].converged, 1);
+});
+
 step('optimizeVolume: ODT-remeshes a tetrahedral mesh', () => {
     // A tetra mesh (simplexified hex cube). optimizeVolume relocates vertices
     // and flips connectivity; the boundary is preserved and no cell inverts.
@@ -1706,6 +1857,9 @@ step('every binding is reachable through the wrapper', () => {
         'distanceToSurface',
         'computeSdf',
         'computeCurvature',
+        'repair',
+        'shrinkwrap',
+        'sobolevDeform',
         'stats',
         'meshBackend',
         'hasCgnslib',

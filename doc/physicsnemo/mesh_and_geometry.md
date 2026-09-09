@@ -65,7 +65,9 @@ Where meshio++ has a direct counterpart:
 | `generate` | [`compute_sdf`](../sdf.md) and [`isosurface`](../isosurface.md) — an SDF lattice and its contour |
 | `spatial.signed_distance_field` | [`sample_distance`](../sdf.md) — with the angle-weighted pseudonormal sign a nearest-triangle normal gets wrong at a spike |
 | `remeshing` | [`remesh`](../remesh.md), [`remesh_volume`](../remesh_volume.md), [`optimize_volume`](../optimize_volume.md) |
-| `repair` | [`clean`](../clean.md) — weld, drop degenerate, drop duplicate, prune orphans |
+| `repair` | [`repair`](../repair.md) — orientation, hole filling, bowtie splitting (v10.38.0); [`clean`](../clean.md) for the weld, degenerate/duplicate drop and orphan prune |
+| `transformations.deform.shrinkwrap` | [`shrinkwrap`](../shrinkwrap.md) (v10.38.0) — one projection, offset along the hit feature's pseudonormal rather than the selected triangle's |
+| `transformations.deform.sobolev_deform` | [`sobolev_deform`](../sobolev_deform.md) (v10.38.0) — the same screened-Poisson filter over the same P1 operators, not differentiable |
 | `subdivision` | [`refine`](../refine.md), [`subdivide`](../subdivide.md), and [`agglomerate`](../agglomerate.md) going the other way |
 | `boundaries` | [`extract_surface`, `extract_skin`](../extract_surface.md), and [named regions](../regions.md) for the naming |
 | `validation` | [`compute_quality`](../mesh_quality.md), [`compute_stats`](../stats.md) |

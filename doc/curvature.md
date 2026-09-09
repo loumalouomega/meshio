@@ -39,7 +39,7 @@ Measured, not guessed, on a unit-radius icosphere (subdivision 3): `mixed-vorono
 
 ## `H` is orientation-dependent, `K` is not
 
-The mean-curvature normal's sign comes from the surface's own winding, so a mesh whose facets disagree about which side is out yields sign-flipped patches with **no error raised** — `compute_curvature` never inspects orientation globally, only locally through the cotangent weights. That is why the result always carries the input's surface `quality` (the same four counts [`sample_distance`](/sdf) reports: boundary edges, non-manifold edges, inconsistent pairs, degenerate triangles): check `quality["inconsistent_pairs"]` before trusting a sign. A nonzero count triggers a warning naming the fix once `repair` ships (tracked in [the roadmap](/roadmap)); until then, weld and re-orient by hand or accept the caveat. **This operation never silently repairs its input.**
+The mean-curvature normal's sign comes from the surface's own winding, so a mesh whose facets disagree about which side is out yields sign-flipped patches with **no error raised** — `compute_curvature` never inspects orientation globally, only locally through the cotangent weights. That is why the result always carries the input's surface `quality` (the same four counts [`sample_distance`](/sdf) reports: boundary edges, non-manifold edges, inconsistent pairs, degenerate triangles): check `quality["inconsistent_pairs"]` before trusting a sign. A nonzero count triggers a warning naming the fix: run [`repair`](/repair) first. **This operation never silently repairs its input.**
 
 ## Boundary and isolated vertices
 

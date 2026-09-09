@@ -166,6 +166,9 @@ function resolveVariant(variant) {
  *   remeshVolume: (mesh: Mesh, resolution?: number[], cellSize?: number, bounds?: number[], padding?: number, paddingRelative?: number, maxCells?: number, maxTets?: number, warpFraction?: number, sign?: string, watertightCheck?: string) => {mesh: Mesh, numTets: number, numVerticesWarped: number, numTetsRejected: number, numNonManifoldEdges: number},
  *   optimizeVolume: (mesh: Mesh, maxIterations?: number, relocate?: boolean, flip?: boolean, preserveBoundary?: boolean, minImprovement?: number) => {mesh: Mesh, numFlips: number, num23Flips: number, num32Flips: number, numVerticesMoved: number, numTets: number, minQualityBefore: number, minQualityAfter: number},
  *   computeCurvature: (mesh: Mesh, mean?: boolean, gaussian?: boolean, dualArea?: string, includeBoundary?: boolean, recordArea?: boolean, recordPrincipal?: boolean, region?: string) => {mesh: Mesh, numBoundary: number, numIsolated: number, numDegenerate: number, totalAngleDefect: number, quality: {boundaryEdges: number, nonManifoldEdges: number, inconsistentPairs: number, degenerateTriangles: number, watertight: boolean}},
+ *   repair: (mesh: Mesh, fixOrientation?: boolean, orientOutward?: boolean, fillHoles?: boolean, splitNonManifold?: boolean, maxHoleEdges?: number, weldTolerance?: number, recordProvenance?: boolean) => {mesh: Mesh, qualityBefore: object, qualityAfter: object, numFlipped: number, numComponents: number, largestComponent: number, numOrientedOutward: number, numUnorientable: number, numVerticesSplit: number, numHolesDetected: number, numHolesFilled: number, numHolesSkipped: number, numFacesAdded: number, numPointsAdded: number, pointsWelded: number},
+ *   shrinkwrap: (mesh: Mesh, target: Mesh, offset?: number, maxDistance?: number, weights?: string, targetRegion?: string, normalWeight?: string, recordDistance?: boolean, recordClosestCell?: boolean) => {mesh: Mesh, quality: object, numProjected: number, numMissed: number, numSkipped: number, maxDisplacement: number},
+ *   sobolevDeform: (mesh: Mesh, array: string, lengthScale: number, fixedPointsArray?: string, fixBoundary?: boolean, recordFiltered?: boolean, maxIterations?: number, tolerance?: number) => {mesh: Mesh, numIterations: number, residual: number, converged: boolean, numFixed: number, numIsolated: number, maxDisplacement: number},
  *   split: (mesh: Mesh, by: string, tagName?: string) => {key: string, mesh: Mesh}[],
  *   convertCells: (mesh: Mesh, mode?: string, recordParentIds?: boolean) => Mesh,
  *   subdivide: (mesh: Mesh, recordParentIds?: boolean) => Mesh,
@@ -558,6 +561,43 @@ export async function loadMeshioPlusPlus(moduleOverrides = {}, { variant = 'auto
         ) =>
             Module.computeCurvature(mesh, mean, gaussian, dualArea, includeBoundary,
                 recordArea, recordPrincipal, region),
+        repair: (
+            mesh,
+            fixOrientation = true,
+            orientOutward = true,
+            fillHoles = true,
+            splitNonManifold = true,
+            maxHoleEdges = 10,
+            weldTolerance = 0,
+            recordProvenance = false,
+        ) =>
+            Module.repair(mesh, fixOrientation, orientOutward, fillHoles, splitNonManifold,
+                maxHoleEdges, weldTolerance, recordProvenance),
+        shrinkwrap: (
+            mesh,
+            target,
+            offset = 0,
+            maxDistance = 0,
+            weights = '',
+            targetRegion = '',
+            normalWeight = 'angle',
+            recordDistance = false,
+            recordClosestCell = false,
+        ) =>
+            Module.shrinkwrap(mesh, target, offset, maxDistance, weights, targetRegion,
+                normalWeight, recordDistance, recordClosestCell),
+        sobolevDeform: (
+            mesh,
+            array,
+            lengthScale,
+            fixedPointsArray = '',
+            fixBoundary = false,
+            recordFiltered = false,
+            maxIterations = 128,
+            tolerance = 1e-10,
+        ) =>
+            Module.sobolevDeform(mesh, array, lengthScale, fixedPointsArray, fixBoundary,
+                recordFiltered, maxIterations, tolerance),
         split: (mesh, by, tagName = '') => Module.split(mesh, by, tagName),
         convertCells: (mesh, mode = 'linearize', recordParentIds = false) =>
             Module.convertCells(mesh, mode, recordParentIds),

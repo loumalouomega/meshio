@@ -7,6 +7,19 @@
  * A rectangular (uniform node count) group of cells, all the same meshio++
  * cell type.
  */
+/**
+ * What is wrong with a surface, in numbers rather than a bare flag -- the four
+ * counts `surfaceWatertightCheck`, `computeCurvature`, `repair` and
+ * `shrinkwrap` all report.
+ */
+export interface SurfaceQualityInfo {
+  boundaryEdges: number;
+  nonManifoldEdges: number;
+  inconsistentPairs: number;
+  degenerateTriangles: number;
+  watertight: boolean;
+}
+
 export interface RectangularCellBlock {
   /** meshio++ cell type name, e.g. "triangle", "tetra10", "hexahedron". */
   type: string;
@@ -1562,6 +1575,100 @@ export interface MeshioPlusPlusModule {
       degenerateTriangles: number;
       watertight: boolean;
     };
+  };
+
+  /**
+   * Surface repair beyond `clean`: weld (opt-in) -> triangulate -> split
+   * bowties -> orient by the topological half-edge rule per connected
+   * component -> fan-fill boundary loops of at most `maxHoleEdges` edges,
+   * wound to agree with the surrounding surface -> orient closed components
+   * outward. Lower-dimensional blocks ride along; fill triangles land in one
+   * trailing `triangle` block. Non-manifold EDGES are counted, never split.
+   * See doc/repair.md.
+   * @throws {Error} on a volume or higher-order input (naming the fix).
+   */
+  repair(
+    mesh: Mesh,
+    fixOrientation?: boolean,
+    orientOutward?: boolean,
+    fillHoles?: boolean,
+    splitNonManifold?: boolean,
+    maxHoleEdges?: number,
+    weldTolerance?: number,
+    recordProvenance?: boolean,
+  ): {
+    mesh: Mesh;
+    qualityBefore: SurfaceQualityInfo;
+    qualityAfter: SurfaceQualityInfo;
+    numFlipped: number;
+    numComponents: number;
+    largestComponent: number;
+    numOrientedOutward: number;
+    numUnorientable: number;
+    numVerticesSplit: number;
+    numHolesDetected: number;
+    numHolesFilled: number;
+    numHolesSkipped: number;
+    numFacesAdded: number;
+    numPointsAdded: number;
+    pointsWelded: number;
+  };
+
+  /**
+   * Project every (selected) point of `mesh` onto the surface of `target`:
+   * `x' = x + w (p + offset n - x)`, one projection, no iteration. Every
+   * point of the source moves whatever cells it carries; only the target must
+   * be a surface. The offset goes along the hit FEATURE's pseudonormal (the
+   * bisector at a crease), not the selected triangle's normal. `weights`
+   * names a point-data array on the source. See doc/shrinkwrap.md.
+   * @throws {Error} on an unusable target, region or weights array.
+   */
+  shrinkwrap(
+    mesh: Mesh,
+    target: Mesh,
+    offset?: number,
+    maxDistance?: number,
+    weights?: string,
+    targetRegion?: string,
+    normalWeight?: 'angle' | 'area',
+    recordDistance?: boolean,
+    recordClosestCell?: boolean,
+  ): {
+    mesh: Mesh;
+    quality: SurfaceQualityInfo;
+    numProjected: number;
+    numMissed: number;
+    numSkipped: number;
+    maxDisplacement: number;
+  };
+
+  /**
+   * Sobolev (Helmholtz-filtered) deformation: solve `(M + l^2 K) u = M d`
+   * over the mesh's own P1 operators and move the points by `u` -- a
+   * screened-Poisson low-pass filter of the raw displacement whose cutoff
+   * wavelength is `lengthScale`. Every top-dimensional block must be a linear
+   * simplex; lower-dimensional blocks ride along. Nothing is pinned by
+   * default. Non-convergence sets `converged` false and returns the last
+   * iterate. See doc/sobolev_deform.md.
+   * @throws {Error} on a missing array or a non-simplex block (naming the fix).
+   */
+  sobolevDeform(
+    mesh: Mesh,
+    array: string,
+    lengthScale: number,
+    fixedPointsArray?: string,
+    fixBoundary?: boolean,
+    recordFiltered?: boolean,
+    maxIterations?: number,
+    tolerance?: number,
+  ): {
+    mesh: Mesh;
+    numIterations: number;
+    residual: number;
+    converged: boolean;
+    numFixed: number;
+    numIsolated: number;
+    maxDisplacement: number;
   };
 
   /** Partition a mesh into submeshes by type, connected component, or tag. */

@@ -92,6 +92,9 @@
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
 #include "meshioplusplus/operations/curvature.hpp"
+#include "meshioplusplus/operations/repair.hpp"
+#include "meshioplusplus/operations/shrinkwrap.hpp"
+#include "meshioplusplus/operations/sobolev_deform.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/split.hpp"
 #include "meshioplusplus/operations/stats.hpp"
@@ -428,6 +431,9 @@ void print_usage(std::ostream& os) {
           "  decompress              Decompress a mesh file (in place)\n"
           "  quality (q)             Print mesh quality metrics\n"
           "  curvature               Per-vertex mean/Gaussian curvature of a surface\n"
+          "  repair                  Fix a surface's orientation, holes and bowties\n"
+          "  shrinkwrap              Project a mesh's points onto a target surface\n"
+          "  sobolev-deform          Filter a displacement field and apply it\n"
           "  extract-surface (surface)  Extract the boundary surface/edges\n"
           "  reorder                 Renumber nodes/elements (RCM / Morton / Hilbert)\n"
           "  diff                    Compare two meshes (nonzero exit if different)\n"
@@ -1091,8 +1097,8 @@ int cmd_curvature(const std::vector<std::string>& rArgs) {
     meshioplusplus::CurvatureResult r = meshioplusplus::compute_curvature(mesh, options);
 
     if (!has_flag(p, "quiet")) {
-        std::cout << "curvature ("
-                  << meshioplusplus::curvature_dual_area_name(options.mDualArea) << ")\n";
+        std::cout << "curvature (" << meshioplusplus::curvature_dual_area_name(options.mDualArea)
+                  << ")\n";
         // The Gauss-Bonnet oracle, printed beside its expected value: on a
         // closed surface the defects sum to 2*pi*chi whatever the
         // tessellation, so a reader can check the result without knowing the
@@ -1107,10 +1113,169 @@ int cmd_curvature(const std::vector<std::string>& rArgs) {
         if (r.mQuality.mWatertight)
             std::cout << "watertight\n";
         else
-            std::cout << r.mQuality.mBoundaryEdges << " boundary / "
-                      << r.mQuality.mNonManifoldEdges << " non-manifold / "
-                      << r.mQuality.mInconsistentPairs << " inconsistent edge(s)\n";
+            std::cout << r.mQuality.mBoundaryEdges << " boundary / " << r.mQuality.mNonManifoldEdges
+                      << " non-manifold / " << r.mQuality.mInconsistentPairs
+                      << " inconsistent edge(s)\n";
         std::cout.unsetf(std::ios::floatfield);
+    }
+
+    write_mesh_cli(p.positionals[1], r.mMesh, opt_value(p, "output-format"));
+    return 0;
+}
+
+int cmd_repair(const std::vector<std::string>& rArgs) {
+    auto p = cli_parse(rArgs, {
+                                  {"input-format", {"-i"}, true},
+                                  {"output-format", {"-o"}, true},
+                                  {"no-fix-orientation", {}, false},
+                                  {"no-orient-outward", {}, false},
+                                  {"no-fill-holes", {}, false},
+                                  {"no-split-non-manifold", {}, false},
+                                  {"max-hole-edges", {}, true},
+                                  {"weld-tolerance", {}, true},
+                                  {"record-provenance", {}, false},
+                                  {"quiet", {"-q"}, false},
+                              });
+    if (p.positionals.size() != 2)
+        throw std::runtime_error("repair requires exactly INFILE and OUTFILE");
+    Mesh mesh = read_mesh_cli(p.positionals[0], opt_value(p, "input-format"));
+
+    meshioplusplus::RepairOptions options;
+    options.mFixOrientation = !has_flag(p, "no-fix-orientation");
+    options.mOrientOutward = !has_flag(p, "no-orient-outward");
+    options.mFillHoles = !has_flag(p, "no-fill-holes");
+    options.mSplitNonManifold = !has_flag(p, "no-split-non-manifold");
+    if (has_opt(p, "max-hole-edges"))
+        options.mMaxHoleEdges = std::stoll(opt_value(p, "max-hole-edges"));
+    if (has_opt(p, "weld-tolerance"))
+        options.mWeldTolerance = std::stod(opt_value(p, "weld-tolerance"));
+    options.mRecordProvenance = has_flag(p, "record-provenance");
+
+    meshioplusplus::RepairResult r = meshioplusplus::repair(mesh, options);
+
+    if (!has_flag(p, "quiet")) {
+        auto quality_line = [](const meshioplusplus::SurfaceQuality& q) {
+            if (q.mWatertight)
+                return std::string("watertight");
+            return std::to_string(q.mBoundaryEdges) + " boundary / " +
+                   std::to_string(q.mNonManifoldEdges) + " non-manifold / " +
+                   std::to_string(q.mInconsistentPairs) + " inconsistent edge(s), " +
+                   std::to_string(q.mDegenerateTriangles) + " degenerate triangle(s)";
+        };
+        std::cout << "repair\n";
+        std::cout << "  before:              " << quality_line(r.mQualityBefore) << "\n";
+        std::cout << "  after:               " << quality_line(r.mQualityAfter) << "\n";
+        std::cout << "  triangles rewound:   " << r.mNumFlipped << "\n";
+        std::cout << "  components:          " << r.mNumComponents << " (largest "
+                  << r.mLargestComponent << ", " << r.mNumOrientedOutward << " oriented outward, "
+                  << r.mNumUnorientable << " unorientable)\n";
+        std::cout << "  vertices split:      " << r.mNumVerticesSplit << "\n";
+        std::cout << "  holes:               " << r.mNumHolesFilled << " filled, "
+                  << r.mNumHolesSkipped << " skipped (of " << r.mNumHolesDetected << " detected)\n";
+        std::cout << "  added:               " << r.mNumFacesAdded << " face(s), "
+                  << r.mNumPointsAdded << " point(s)\n";
+        if (r.mPointsWelded > 0)
+            std::cout << "  points welded:       " << r.mPointsWelded << "\n";
+    }
+
+    write_mesh_cli(p.positionals[1], r.mMesh, opt_value(p, "output-format"));
+    return 0;
+}
+
+int cmd_shrinkwrap(const std::vector<std::string>& rArgs) {
+    auto p = cli_parse(rArgs, {
+                                  {"input-format", {"-i"}, true},
+                                  {"output-format", {"-o"}, true},
+                                  {"target-format", {}, true},
+                                  {"offset", {}, true},
+                                  {"max-distance", {}, true},
+                                  {"weights", {}, true},
+                                  {"target-region", {}, true},
+                                  {"normal-weight", {}, true},
+                                  {"record-distance", {}, false},
+                                  {"record-closest-cell", {}, false},
+                                  {"quiet", {"-q"}, false},
+                              });
+    if (p.positionals.size() != 3)
+        throw std::runtime_error("shrinkwrap requires exactly INFILE TARGET and OUTFILE");
+    Mesh mesh = read_mesh_cli(p.positionals[0], opt_value(p, "input-format"));
+    Mesh target = read_mesh_cli(p.positionals[1], opt_value(p, "target-format"));
+
+    meshioplusplus::ShrinkwrapOptions options;
+    if (has_opt(p, "offset"))
+        options.mOffset = std::stod(opt_value(p, "offset"));
+    if (has_opt(p, "max-distance"))
+        options.mMaxDistance = std::stod(opt_value(p, "max-distance"));
+    options.mWeights = opt_value(p, "weights");
+    options.mTargetRegion = opt_value(p, "target-region");
+    const std::string weight = opt_value(p, "normal-weight");
+    options.mNormalWeight = meshioplusplus::sdf_weight_from_name(weight.empty() ? "angle" : weight);
+    options.mRecordDistance = has_flag(p, "record-distance");
+    options.mRecordClosestCell = has_flag(p, "record-closest-cell");
+
+    meshioplusplus::ShrinkwrapResult r = meshioplusplus::shrinkwrap(mesh, target, options);
+
+    if (!has_flag(p, "quiet")) {
+        std::cout << "shrinkwrap\n";
+        std::cout << "  points projected:    " << r.mNumProjected << "\n";
+        std::cout << "  points missed:       " << r.mNumMissed << "\n";
+        std::cout << "  points skipped:      " << r.mNumSkipped << "\n";
+        std::cout << "  max displacement:    " << r.mMaxDisplacement << "\n";
+        std::cout << "  target: ";
+        if (r.mQuality.mWatertight)
+            std::cout << "watertight\n";
+        else
+            std::cout << r.mQuality.mBoundaryEdges << " boundary / " << r.mQuality.mNonManifoldEdges
+                      << " non-manifold / " << r.mQuality.mInconsistentPairs
+                      << " inconsistent edge(s)\n";
+    }
+
+    write_mesh_cli(p.positionals[2], r.mMesh, opt_value(p, "output-format"));
+    return 0;
+}
+
+int cmd_sobolev_deform(const std::vector<std::string>& rArgs) {
+    auto p = cli_parse(rArgs, {
+                                  {"input-format", {"-i"}, true},
+                                  {"output-format", {"-o"}, true},
+                                  {"array", {}, true},
+                                  {"length-scale", {}, true},
+                                  {"fixed-points-array", {}, true},
+                                  {"fix-boundary", {}, false},
+                                  {"record-filtered", {}, false},
+                                  {"max-iterations", {}, true},
+                                  {"tolerance", {}, true},
+                                  {"quiet", {"-q"}, false},
+                              });
+    if (p.positionals.size() != 2)
+        throw std::runtime_error("sobolev-deform requires exactly INFILE and OUTFILE");
+    if (!has_opt(p, "array"))
+        throw std::runtime_error("sobolev-deform requires --array NAME");
+    if (!has_opt(p, "length-scale"))
+        throw std::runtime_error("sobolev-deform requires --length-scale L");
+    Mesh mesh = read_mesh_cli(p.positionals[0], opt_value(p, "input-format"));
+
+    meshioplusplus::SobolevOptions options;
+    options.mArrayName = opt_value(p, "array");
+    options.mLengthScale = std::stod(opt_value(p, "length-scale"));
+    options.mFixedPointsArray = opt_value(p, "fixed-points-array");
+    options.mFixBoundary = has_flag(p, "fix-boundary");
+    options.mRecordFiltered = has_flag(p, "record-filtered");
+    if (has_opt(p, "max-iterations"))
+        options.mMaxIterations = std::stoi(opt_value(p, "max-iterations"));
+    if (has_opt(p, "tolerance"))
+        options.mTolerance = std::stod(opt_value(p, "tolerance"));
+
+    meshioplusplus::SobolevResult r = meshioplusplus::sobolev_deform(mesh, options);
+
+    if (!has_flag(p, "quiet")) {
+        std::cout << "sobolev_deform\n";
+        std::cout << "  iterations:          " << r.mNumIterations
+                  << (r.mConverged ? " (converged)" : " (NOT converged)") << "\n";
+        std::cout << "  relative residual:   " << r.mResidual << "\n";
+        std::cout << "  points fixed:        " << r.mNumFixed << "\n";
+        std::cout << "  points isolated:     " << r.mNumIsolated << "\n";
+        std::cout << "  max displacement:    " << r.mMaxDisplacement << "\n";
     }
 
     write_mesh_cli(p.positionals[1], r.mMesh, opt_value(p, "output-format"));
@@ -1926,8 +2091,8 @@ int cmd_remesh(const std::vector<std::string>& rArgs) {
     options.mMetric = meshioplusplus::remesh_metric_from_name(opt_value(p, "metric", "isotropic"));
     options.mGradation = std::stod(opt_value(p, "gradation", "0"));
     options.mPreserveBoundary = !has_flag(p, "no-preserve-boundary");
-    options.mMaxAnisotropy = std::stod(
-        opt_value(p, "max-anisotropy", std::to_string(meshioplusplus::kRemeshDefaultMaxAnisotropy)));
+    options.mMaxAnisotropy = std::stod(opt_value(
+        p, "max-anisotropy", std::to_string(meshioplusplus::kRemeshDefaultMaxAnisotropy)));
 
     auto r = meshioplusplus::remesh(mesh, options);
     if (!has_flag(p, "quiet")) {
@@ -2832,7 +2997,8 @@ int cmd_data_integrate(const std::vector<std::string>& rArgs) {
         const std::string label = reg.mName.empty() ? "(whole mesh)" : reg.mName;
         char line[128];
         std::snprintf(line, sizeof(line), "    %-20s cells=%-6lld skipped=%-4lld", label.c_str(),
-                      static_cast<long long>(reg.mNumCells), static_cast<long long>(reg.mNumSkipped));
+                      static_cast<long long>(reg.mNumCells),
+                      static_cast<long long>(reg.mNumSkipped));
         std::cout << line << " total=[";
         for (std::size_t k = 0; k < reg.mTotalPerComponent.size(); ++k)
             std::cout << (k ? ", " : "") << data_g6(reg.mTotalPerComponent[k]);
@@ -3323,6 +3489,12 @@ int main(int argc, char** argv) {
             return cmd_decompress(rest);
         if (cmd == "quality" || cmd == "q")
             return cmd_quality(rest);
+        if (cmd == "repair")
+            return cmd_repair(rest);
+        if (cmd == "shrinkwrap")
+            return cmd_shrinkwrap(rest);
+        if (cmd == "sobolev-deform")
+            return cmd_sobolev_deform(rest);
         if (cmd == "curvature")
             return cmd_curvature(rest);
         if (cmd == "extract-surface" || cmd == "surface")

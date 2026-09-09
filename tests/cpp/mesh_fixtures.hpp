@@ -38,7 +38,9 @@
  */
 
 // System includes
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -532,6 +534,104 @@ inline void expect_same_geometry(const Mesh& rA, const Mesh& rB) {
             EXPECT_EQ(meshioplusplus::detail::read_int(ca.Conn(), i),
                       meshioplusplus::detail::read_int(cb.Conn(), i));
     }
+}
+
+// --- surface fixtures shared by the curvature/repair/shrinkwrap suites -------
+inline constexpr double mt_kPi = 3.141592653589793238462643383279;
+
+/// A closed icosahedron of radius R, then `Subdivisions` rounds of 1-to-4
+/// splitting with every new point pushed back onto the sphere.
+///
+/// meshio++ has no `sphere` primitive (roadmap section 6), and the analytic
+/// answers on a sphere -- H = 1/R and K = 1/R^2 at every vertex -- are the
+/// only exact per-vertex oracle either estimator has.
+inline Mesh icosphere(int Subdivisions, double Radius) {
+    const double t = (1.0 + std::sqrt(5.0)) / 2.0;
+    std::vector<std::vector<double>> p = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0},
+                                          {0, -1, t}, {0, 1, t}, {0, -1, -t}, {0, 1, -t},
+                                          {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
+    std::vector<std::vector<std::int64_t>> f = {
+        {0, 11, 5},  {0, 5, 1},  {0, 1, 7},  {0, 7, 10}, {0, 10, 11}, {1, 5, 9}, {5, 11, 4},
+        {11, 10, 2}, {10, 7, 6}, {7, 1, 8},  {3, 9, 4},  {3, 4, 2},   {3, 2, 6}, {3, 6, 8},
+        {3, 8, 9},   {4, 9, 5},  {2, 4, 11}, {6, 2, 10}, {8, 6, 7},   {9, 8, 1}};
+
+    for (int s = 0; s < Subdivisions; ++s) {
+        std::map<std::pair<std::int64_t, std::int64_t>, std::int64_t> mid;
+        std::vector<std::vector<std::int64_t>> out;
+        auto midpoint = [&](std::int64_t a, std::int64_t b) {
+            const auto key = std::make_pair(std::min(a, b), std::max(a, b));
+            auto it = mid.find(key);
+            if (it != mid.end())
+                return it->second;
+            const std::int64_t id = static_cast<std::int64_t>(p.size());
+            p.push_back(
+                {0.5 * (p[static_cast<std::size_t>(a)][0] + p[static_cast<std::size_t>(b)][0]),
+                 0.5 * (p[static_cast<std::size_t>(a)][1] + p[static_cast<std::size_t>(b)][1]),
+                 0.5 * (p[static_cast<std::size_t>(a)][2] + p[static_cast<std::size_t>(b)][2])});
+            mid.emplace(key, id);
+            return id;
+        };
+        for (const auto& tri : f) {
+            const std::int64_t ab = midpoint(tri[0], tri[1]);
+            const std::int64_t bc = midpoint(tri[1], tri[2]);
+            const std::int64_t ca = midpoint(tri[2], tri[0]);
+            out.push_back({tri[0], ab, ca});
+            out.push_back({tri[1], bc, ab});
+            out.push_back({tri[2], ca, bc});
+            out.push_back({ab, bc, ca});
+        }
+        f = out;
+    }
+    for (auto& v : p) {
+        const double n = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        for (auto& x : v)
+            x *= Radius / n;
+    }
+    return make_mesh(p, "triangle", f);
+}
+
+/// An OPEN cylinder of radius R and height H: `Around` columns, `Along` rows,
+/// no caps. The one fixture that separates the two estimators -- K is exactly
+/// 0 everywhere (a cylinder is developable) while H is 1/(2R), non-zero.
+inline Mesh open_cylinder(int Around, int Along, double Radius, double Height) {
+    std::vector<std::vector<double>> p;
+    for (int j = 0; j <= Along; ++j) {
+        const double z = Height * (static_cast<double>(j) / Along - 0.5);
+        for (int i = 0; i < Around; ++i) {
+            const double a = 2.0 * mt_kPi * static_cast<double>(i) / Around;
+            p.push_back({Radius * std::cos(a), Radius * std::sin(a), z});
+        }
+    }
+    auto id = [&](int j, int i) { return static_cast<std::int64_t>(j * Around + (i % Around)); };
+    std::vector<std::vector<std::int64_t>> f;
+    for (int j = 0; j < Along; ++j)
+        for (int i = 0; i < Around; ++i) {
+            f.push_back({id(j, i), id(j, i + 1), id(j + 1, i + 1)});
+            f.push_back({id(j, i), id(j + 1, i + 1), id(j + 1, i)});
+        }
+    return make_mesh(p, "triangle", f);
+}
+
+/// A flat triangulated square in the z = 0 plane, deliberately with an
+/// irregular diagonal pattern so a "flat" answer cannot come from symmetry.
+inline Mesh plane_grid(int N) {
+    std::vector<std::vector<double>> p;
+    for (int j = 0; j <= N; ++j)
+        for (int i = 0; i <= N; ++i)
+            p.push_back({static_cast<double>(i), static_cast<double>(j), 0.0});
+    auto id = [&](int i, int j) { return static_cast<std::int64_t>(j * (N + 1) + i); };
+    std::vector<std::vector<std::int64_t>> f;
+    for (int j = 0; j < N; ++j)
+        for (int i = 0; i < N; ++i) {
+            if ((i + j) % 2 == 0) {
+                f.push_back({id(i, j), id(i + 1, j), id(i + 1, j + 1)});
+                f.push_back({id(i, j), id(i + 1, j + 1), id(i, j + 1)});
+            } else {
+                f.push_back({id(i, j), id(i + 1, j), id(i, j + 1)});
+                f.push_back({id(i + 1, j), id(i + 1, j + 1), id(i, j + 1)});
+            }
+        }
+    return make_mesh(p, "triangle", f);
 }
 
 }  // namespace mt

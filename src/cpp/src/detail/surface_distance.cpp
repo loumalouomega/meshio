@@ -388,6 +388,48 @@ SdNearestTriangle sd_nearest_triangle(const DistanceQuery& rQuery, const Triangl
     return {best_tri, best_hit};
 }
 
+// The pseudonormal of the FEATURE a hit landed on, not of the nearest
+// triangle: using the triangle's own normal is right on convex geometry and
+// wrong on the concave side of every crease. Hoisted verbatim out of
+// query_distances (a pure refactor -- that function's own suite is the
+// regression guard) so query_surface_projections reads the same tables the
+// same way. Returned unnormalized.
+Vec3 sd_feature_normal(const DistanceQuery& rQuery, const TriangleSoup& rSoup, std::int64_t Tri,
+                       TriangleFeature Feature) {
+    const std::size_t ti = static_cast<std::size_t>(Tri);
+    const std::array<std::int64_t, 3>& v = rSoup.mVertices[ti];
+    Vec3 normal = rQuery.mFaceNormal[ti];
+    switch (Feature) {
+        case TriangleFeature::VertexA:
+            normal = rQuery.mVertexNormal[static_cast<std::size_t>(v[0])];
+            break;
+        case TriangleFeature::VertexB:
+            normal = rQuery.mVertexNormal[static_cast<std::size_t>(v[1])];
+            break;
+        case TriangleFeature::VertexC:
+            normal = rQuery.mVertexNormal[static_cast<std::size_t>(v[2])];
+            break;
+        case TriangleFeature::EdgeAB:
+        case TriangleFeature::EdgeBC:
+        case TriangleFeature::EdgeCA: {
+            const std::size_t e = Feature == TriangleFeature::EdgeAB
+                                      ? 0
+                                      : (Feature == TriangleFeature::EdgeBC ? 1 : 2);
+            const std::int64_t a = v[e];
+            const std::int64_t b = v[(e + 1) % 3];
+            const SurfaceEdgeKey key{a < b ? a : b, a < b ? b : a};
+            auto it = rQuery.mEdgeNormal.find(key);
+            if (it != rQuery.mEdgeNormal.end())
+                normal = it->second;
+            break;
+        }
+        case TriangleFeature::Face:
+        default:
+            break;
+    }
+    return normal;
+}
+
 }  // namespace
 
 std::vector<DistanceHit> query_distances(const DistanceQuery& rQuery,
@@ -457,8 +499,8 @@ std::vector<DistanceHit> query_distances(const DistanceQuery& rQuery,
                 const double lb = vec3_norm(b);
                 const double lc = vec3_norm(c);
                 const double num = triple_product(a, b, c);
-                const double den = la * lb * lc + vec3_dot(a, b) * lc + vec3_dot(b, c) * la +
-                                   vec3_dot(c, a) * lb;
+                const double den =
+                    la * lb * lc + vec3_dot(a, b) * lc + vec3_dot(b, c) * la + vec3_dot(c, a) * lb;
                 w += 2.0 * std::atan2(num, den);
             }
             const bool inside = w / (4.0 * 3.14159265358979323846) > 0.5;
@@ -467,39 +509,8 @@ std::vector<DistanceHit> query_distances(const DistanceQuery& rQuery,
         }
 
         // Pseudonormal: the normal of the nearest FEATURE, not of the nearest
-        // triangle. Using the triangle's own normal here is right on convex
-        // geometry and wrong on the concave side of every crease.
-        const std::size_t ti = static_cast<std::size_t>(best_tri);
-        const std::array<std::int64_t, 3>& v = soup.mVertices[ti];
-        Vec3 normal = rQuery.mFaceNormal[ti];
-        switch (best_hit.mFeature) {
-            case TriangleFeature::VertexA:
-                normal = rQuery.mVertexNormal[static_cast<std::size_t>(v[0])];
-                break;
-            case TriangleFeature::VertexB:
-                normal = rQuery.mVertexNormal[static_cast<std::size_t>(v[1])];
-                break;
-            case TriangleFeature::VertexC:
-                normal = rQuery.mVertexNormal[static_cast<std::size_t>(v[2])];
-                break;
-            case TriangleFeature::EdgeAB:
-            case TriangleFeature::EdgeBC:
-            case TriangleFeature::EdgeCA: {
-                const std::size_t e = best_hit.mFeature == TriangleFeature::EdgeAB
-                                          ? 0
-                                          : (best_hit.mFeature == TriangleFeature::EdgeBC ? 1 : 2);
-                const std::int64_t a = v[e];
-                const std::int64_t b = v[(e + 1) % 3];
-                const SurfaceEdgeKey key{a < b ? a : b, a < b ? b : a};
-                auto it = rQuery.mEdgeNormal.find(key);
-                if (it != rQuery.mEdgeNormal.end())
-                    normal = it->second;
-                break;
-            }
-            case TriangleFeature::Face:
-            default:
-                break;
-        }
+        // triangle (sd_feature_normal says why).
+        const Vec3 normal = sd_feature_normal(rQuery, soup, best_tri, best_hit.mFeature);
         const double side = vec3_dot(vec3_sub(query, best_hit.mPoint), normal);
         res.mSignedDistance = side < 0.0 ? -dist : dist;
     });
@@ -508,14 +519,14 @@ std::vector<DistanceHit> query_distances(const DistanceQuery& rQuery,
 }
 
 std::vector<ClosestPointHit> query_closest_points(const DistanceQuery& rQuery,
-                                                   const std::vector<Vec3>& rPoints) {
+                                                  const std::vector<Vec3>& rPoints) {
     const TriangleSoup& soup = *rQuery.mpSoup;
     const std::size_t n = rPoints.size();
     std::vector<ClosestPointHit> out(n);
 
     parallel_for(n, [&](std::size_t p) {
-        const SdNearestTriangle found = sd_nearest_triangle(
-            rQuery, soup, rPoints[p], std::numeric_limits<std::int64_t>::max());
+        const SdNearestTriangle found =
+            sd_nearest_triangle(rQuery, soup, rPoints[p], std::numeric_limits<std::int64_t>::max());
         ClosestPointHit& res = out[p];
         if (found.mTri < 0) {
             res.mFound = false;
@@ -525,6 +536,32 @@ std::vector<ClosestPointHit> query_closest_points(const DistanceQuery& rQuery,
         res.mPoint = found.mHit.mPoint;
         res.mDistance = std::sqrt(found.mHit.mDistanceSq);
         res.mSourceCell = soup.mSourceCell[static_cast<std::size_t>(found.mTri)];
+    });
+
+    return out;
+}
+
+std::vector<SurfaceProjection> query_surface_projections(const DistanceQuery& rQuery,
+                                                         const std::vector<Vec3>& rPoints) {
+    const TriangleSoup& soup = *rQuery.mpSoup;
+    const std::size_t n = rPoints.size();
+    std::vector<SurfaceProjection> out(n);
+
+    parallel_for(n, [&](std::size_t p) {
+        const SdNearestTriangle found =
+            sd_nearest_triangle(rQuery, soup, rPoints[p], std::numeric_limits<std::int64_t>::max());
+        SurfaceProjection& res = out[p];
+        if (found.mTri < 0) {
+            res.mFound = false;
+            return;
+        }
+        res.mFound = true;
+        res.mPoint = found.mHit.mPoint;
+        res.mDistance = std::sqrt(found.mHit.mDistanceSq);
+        res.mTriangle = found.mTri;
+        res.mSourceCell = soup.mSourceCell[static_cast<std::size_t>(found.mTri)];
+        res.mFeature = found.mHit.mFeature;
+        res.mNormal = sd_feature_normal(rQuery, soup, found.mTri, found.mHit.mFeature);
     });
 
     return out;

@@ -289,7 +289,10 @@ def _normal_tables(points, verts, corners, weight):
         length = lens[t]
         if not length > 0.0:
             continue
-        unit = face[t] / length
+        # Multiply by the reciprocal, as the C++ `vec3_scale(n, 1.0 / len)`
+        # does: `face / length` differs in the last ulp, which a sign never
+        # notices but an offset (shrinkwrap) puts straight into a coordinate.
+        unit = face[t] * (1.0 / length)
         for i in range(3):
             if weight == "angle":
                 u = corners[t, (i + 1) % 3] - corners[t, i]

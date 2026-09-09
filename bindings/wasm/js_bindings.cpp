@@ -92,6 +92,9 @@
 #include "meshioplusplus/operations/conservative_interpolate.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
 #include "meshioplusplus/operations/curvature.hpp"
+#include "meshioplusplus/operations/repair.hpp"
+#include "meshioplusplus/operations/shrinkwrap.hpp"
+#include "meshioplusplus/operations/sobolev_deform.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/data_calc.hpp"
@@ -2252,6 +2255,115 @@ val compute_curvature_js(const val& rMeshObj, bool mean, bool gaussian,
     });
 }
 
+/// A SurfaceQuality as a plain JS object (the four counts plus the verdict).
+val quality_to_val(const meshioplusplus::SurfaceQuality& rQuality) {
+    val quality = val::object();
+    quality.set("boundaryEdges", static_cast<double>(rQuality.mBoundaryEdges));
+    quality.set("nonManifoldEdges", static_cast<double>(rQuality.mNonManifoldEdges));
+    quality.set("inconsistentPairs", static_cast<double>(rQuality.mInconsistentPairs));
+    quality.set("degenerateTriangles", static_cast<double>(rQuality.mDegenerateTriangles));
+    quality.set("watertight", rQuality.mWatertight);
+    return quality;
+}
+
+/**
+ * @brief Surface repair: orientation by the topological half-edge rule,
+ * fan-filled holes wound to agree with the surrounding surface, and bowtie
+ * splitting. See operations/repair.hpp.
+ */
+val repair_js(const val& rMeshObj, bool fixOrientation, bool orientOutward, bool fillHoles,
+              bool splitNonManifold, double maxHoleEdges, double weldTolerance,
+              bool recordProvenance) {
+    return with_js_errors([&]() -> val {
+        meshioplusplus::RepairOptions options;
+        options.mFixOrientation = fixOrientation;
+        options.mOrientOutward = orientOutward;
+        options.mFillHoles = fillHoles;
+        options.mSplitNonManifold = splitNonManifold;
+        options.mMaxHoleEdges = static_cast<std::int64_t>(maxHoleEdges);
+        options.mWeldTolerance = weldTolerance;
+        options.mRecordProvenance = recordProvenance;
+        meshioplusplus::RepairResult r = meshioplusplus::repair(val_to_mesh(rMeshObj), options);
+        val out = val::object();
+        out.set("mesh", mesh_to_val(r.mMesh));
+        out.set("qualityBefore", quality_to_val(r.mQualityBefore));
+        out.set("qualityAfter", quality_to_val(r.mQualityAfter));
+        out.set("numFlipped", static_cast<double>(r.mNumFlipped));
+        out.set("numComponents", static_cast<double>(r.mNumComponents));
+        out.set("largestComponent", static_cast<double>(r.mLargestComponent));
+        out.set("numOrientedOutward", static_cast<double>(r.mNumOrientedOutward));
+        out.set("numUnorientable", static_cast<double>(r.mNumUnorientable));
+        out.set("numVerticesSplit", static_cast<double>(r.mNumVerticesSplit));
+        out.set("numHolesDetected", static_cast<double>(r.mNumHolesDetected));
+        out.set("numHolesFilled", static_cast<double>(r.mNumHolesFilled));
+        out.set("numHolesSkipped", static_cast<double>(r.mNumHolesSkipped));
+        out.set("numFacesAdded", static_cast<double>(r.mNumFacesAdded));
+        out.set("numPointsAdded", static_cast<double>(r.mNumPointsAdded));
+        out.set("pointsWelded", static_cast<double>(r.mPointsWelded));
+        return out;
+    });
+}
+
+/**
+ * @brief Project a mesh's points onto a target triangle surface. One
+ * projection, offset along the hit FEATURE's pseudonormal. See
+ * operations/shrinkwrap.hpp.
+ */
+val shrinkwrap_js(const val& rMeshObj, const val& rTargetObj, double offset, double maxDistance,
+                  const std::string& rWeights, const std::string& rTargetRegion,
+                  const std::string& rNormalWeight, bool recordDistance, bool recordClosestCell) {
+    return with_js_errors([&]() -> val {
+        meshioplusplus::ShrinkwrapOptions options;
+        options.mOffset = offset;
+        options.mMaxDistance = maxDistance;
+        options.mWeights = rWeights;
+        options.mTargetRegion = rTargetRegion;
+        options.mNormalWeight = meshioplusplus::sdf_weight_from_name(rNormalWeight);
+        options.mRecordDistance = recordDistance;
+        options.mRecordClosestCell = recordClosestCell;
+        meshioplusplus::ShrinkwrapResult r =
+            meshioplusplus::shrinkwrap(val_to_mesh(rMeshObj), val_to_mesh(rTargetObj), options);
+        val out = val::object();
+        out.set("mesh", mesh_to_val(r.mMesh));
+        out.set("quality", quality_to_val(r.mQuality));
+        out.set("numProjected", static_cast<double>(r.mNumProjected));
+        out.set("numMissed", static_cast<double>(r.mNumMissed));
+        out.set("numSkipped", static_cast<double>(r.mNumSkipped));
+        out.set("maxDisplacement", r.mMaxDisplacement);
+        return out;
+    });
+}
+
+/**
+ * @brief Sobolev (Helmholtz-filtered) deformation over the mesh's own P1
+ * operators. See operations/sobolev_deform.hpp.
+ */
+val sobolev_deform_js(const val& rMeshObj, const std::string& rArray, double lengthScale,
+                      const std::string& rFixedPointsArray, bool fixBoundary, bool recordFiltered,
+                      double maxIterations, double tolerance) {
+    return with_js_errors([&]() -> val {
+        meshioplusplus::SobolevOptions options;
+        options.mArrayName = rArray;
+        options.mLengthScale = lengthScale;
+        options.mFixedPointsArray = rFixedPointsArray;
+        options.mFixBoundary = fixBoundary;
+        options.mRecordFiltered = recordFiltered;
+        options.mMaxIterations = static_cast<int>(maxIterations);
+        options.mTolerance = tolerance;
+        meshioplusplus::SobolevResult r =
+            meshioplusplus::sobolev_deform(val_to_mesh(rMeshObj), options);
+        val out = val::object();
+        out.set("mesh", mesh_to_val(r.mMesh));
+        out.set("numIterations", static_cast<double>(r.mNumIterations));
+        out.set("residual", r.mResidual);
+        out.set("converged", r.mConverged);
+        out.set("numFixed", static_cast<double>(r.mNumFixed));
+        out.set("numIsolated", static_cast<double>(r.mNumIsolated));
+        out.set("maxDisplacement", r.mMaxDisplacement);
+        return out;
+    });
+}
+
 val optimize_volume_js(const val& rMeshObj, double maxIterations, bool relocate, bool flip,
                        bool preserveBoundary, double minImprovement) {
     return with_js_errors([&]() -> val {
@@ -3188,6 +3300,9 @@ EMSCRIPTEN_BINDINGS(meshioplusplus_wasm) {
     emscripten::function("remeshVolume", &remesh_volume_js);
     emscripten::function("optimizeVolume", &optimize_volume_js);
     emscripten::function("computeCurvature", &compute_curvature_js);
+    emscripten::function("repair", &repair_js);
+    emscripten::function("shrinkwrap", &shrinkwrap_js);
+    emscripten::function("sobolevDeform", &sobolev_deform_js);
     emscripten::function("cropBbox", &crop_bbox_js);
     emscripten::function("cropPlane", &crop_plane_js);
     emscripten::function("cropPredicate", &crop_predicate_js);

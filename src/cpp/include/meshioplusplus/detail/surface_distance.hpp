@@ -76,6 +76,7 @@
 #include "meshioplusplus/export.hpp"
 #include "meshioplusplus/mesh.hpp"
 #include "meshioplusplus/detail/geometry.hpp"
+#include "meshioplusplus/detail/point_triangle.hpp"
 #include "meshioplusplus/detail/spatial_hash.hpp"
 #include "meshioplusplus/operations/sdf.hpp"
 
@@ -99,7 +100,8 @@ struct TriangleSoup {
     /// so `mPoints[i]` is mesh point `i`, index for index, orphans included.
     /// Two coincident-but-distinct points therefore read as two vertices here,
     /// which is why an edge between them counts as a boundary edge and why
-    /// `repair` merges points before it looks at orientation or holes.
+    /// `repair` offers `mWeldTolerance` to merge points before it looks at
+    /// orientation or holes.
     std::vector<std::array<std::int64_t, 3>> mVertices;
     /// Every input point, in the input's own order (see `mVertices`).
     std::vector<Vec3> mPoints;
@@ -206,9 +208,9 @@ struct DistanceHit {
  * Parallel over query points, which are independent; each point's own search is
  * serial and totally ordered, so the result does not depend on thread count.
  */
-MESHIOPLUSPLUS_API std::vector<DistanceHit> query_distances(
-    const DistanceQuery& rQuery, const std::vector<Vec3>& rPoints,
-    const SurfaceDistanceOptions& rOptions);
+MESHIOPLUSPLUS_API std::vector<DistanceHit> query_distances(const DistanceQuery& rQuery,
+                                                            const std::vector<Vec3>& rPoints,
+                                                            const SurfaceDistanceOptions& rOptions);
 
 /// What `query_closest_points` resolved a single query point to. A new,
 /// additive type (Tier C) rather than a field added to `DistanceHit` -- see
@@ -248,6 +250,43 @@ struct ClosestPointHit {
  *         field exists so a caller need not assume).
  */
 MESHIOPLUSPLUS_API std::vector<ClosestPointHit> query_closest_points(
+    const DistanceQuery& rQuery, const std::vector<Vec3>& rPoints);
+
+/// What `query_surface_projections` resolved a single query point to. A
+/// second additive sibling (Tier C), for the same reason `ClosestPointHit` is
+/// one: `ClosestPointHit`'s layout is installed-header state, and `shrinkwrap`
+/// needs three things it does not carry -- the soup-local triangle, the
+/// feature the hit landed on, and that feature's pseudonormal.
+struct SurfaceProjection {
+    Vec3 mPoint{0.0, 0.0, 0.0};  ///< The nearest point on the soup.
+    /// The UNNORMALIZED pseudonormal of the hit FEATURE, read straight from
+    /// the `DistanceQuery` tables: the face's cross product for a face hit, the
+    /// sum of the two incident unit normals for an edge hit, the weighted sum
+    /// of the incident unit normals for a vertex hit. Zero only when every
+    /// triangle touching the feature is degenerate.
+    Vec3 mNormal{0.0, 0.0, 0.0};
+    double mDistance = 0.0;                            ///< Its distance from the query (unsigned).
+    std::int64_t mTriangle = -1;                       ///< The soup-local triangle the hit is on.
+    std::int64_t mSourceCell = -1;                     ///< The input cell it came from.
+    TriangleFeature mFeature = TriangleFeature::Face;  ///< Which feature was nearest.
+    bool mFound = false;  ///< False only when the soup has no triangles at all.
+};
+
+/**
+ * @brief The nearest point on the soup to each of @p rPoints, together with
+ * the feature it lies on and that feature's pseudonormal.
+ *
+ * `shrinkwrap`'s primitive. It runs the identical `sd_nearest_triangle` search
+ * `query_distances`/`query_closest_points` run and reads the feature normal
+ * through the same lookup `query_distances`' pseudonormal sign uses
+ * (`sd_feature_normal`), so the three cannot disagree about which triangle is
+ * nearest or which way its feature faces. The normal is the FEATURE's -- at an
+ * edge or vertex hit the offset surface's normal is the bisector, which is a
+ * property of the feature and not of whichever of the equidistant triangles
+ * won the tie-break -- and it is returned unnormalized so a caller can tell a
+ * degenerate feature (zero) from a genuine direction.
+ */
+MESHIOPLUSPLUS_API std::vector<SurfaceProjection> query_surface_projections(
     const DistanceQuery& rQuery, const std::vector<Vec3>& rPoints);
 
 }  // namespace detail

@@ -43,6 +43,8 @@
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
 #include "meshioplusplus/operations/curvature.hpp"
+#include "meshioplusplus/operations/repair.hpp"
+#include "meshioplusplus/operations/sobolev_deform.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/data_calc.hpp"
@@ -251,8 +253,14 @@ const std::vector<PipeOpSpec>& pipe_op_table() {
         {"Gradient", {"Array", "Operator", "Method", "Location", "Output", "Component"}},
         {"Hessian", {"Array", "Method", "Location", "Output"}},
         {"Curvature",
-         {"Mean", "Gaussian", "DualArea", "IncludeBoundary", "RecordArea",
-          "RecordPrincipal", "Region"}},
+         {"Mean", "Gaussian", "DualArea", "IncludeBoundary", "RecordArea", "RecordPrincipal",
+          "Region"}},
+        {"Repair",
+         {"FixOrientation", "OrientOutward", "FillHoles", "SplitNonManifold", "MaxHoleEdges",
+          "WeldTolerance", "RecordProvenance"}},
+        {"SobolevDeform",
+         {"Array", "LengthScale", "FixedPointsArray", "FixBoundary", "RecordFiltered",
+          "MaxIterations", "Tolerance"}},
         {"EstimateError", {"Array", "Method", "Marking", "MarkingValue", "Output", "Marked"}},
         {"Remesh",
          {"NumClusters", "Subdivide", "SubsampleRatio", "MaxSubdivide", "MaxIterations",
@@ -312,6 +320,9 @@ const char* pipe_excluded_hint(const std::string& rOp) {
     if (rOp == "Split")
         return "'Split' produces several output meshes and is not a pipeline "
                "step; use the `split` CLI verb";
+    if (rOp == "Shrinkwrap")
+        return "'Shrinkwrap' needs a second (target) mesh and is not a pipeline "
+               "step; use the `shrinkwrap` CLI verb";
     if (rOp == "Diff")
         return "'Diff' compares two meshes and is not a pipeline step; use the "
                "`diff` CLI verb";
@@ -689,7 +700,8 @@ Mesh apply_pipeline_step(Mesh mesh, const PipelineStep& rStep, PipelineReport& r
         CurvatureOptions opts;
         opts.mMean = pipe_flag(rStep, "Mean", true);
         opts.mGaussian = pipe_flag(rStep, "Gaussian", true);
-        opts.mDualArea = curvature_dual_area_from_name(pipe_text(rStep, "DualArea", "mixed-voronoi"));
+        opts.mDualArea =
+            curvature_dual_area_from_name(pipe_text(rStep, "DualArea", "mixed-voronoi"));
         opts.mIncludeBoundary = pipe_flag(rStep, "IncludeBoundary", false);
         opts.mRecordArea = pipe_flag(rStep, "RecordArea", false);
         opts.mRecordPrincipal = pipe_flag(rStep, "RecordPrincipal", false);
@@ -709,6 +721,61 @@ Mesh apply_pipeline_step(Mesh mesh, const PipelineStep& rStep, PipelineReport& r
                 " edge pair(s) wind the same way, so the sign of 'curvature:mean' is not "
                 "trustworthy");
         return std::move(cr.mMesh);
+    }
+    if (op == "Repair") {
+        RepairOptions opts;
+        opts.mFixOrientation = pipe_flag(rStep, "FixOrientation", true);
+        opts.mOrientOutward = pipe_flag(rStep, "OrientOutward", true);
+        opts.mFillHoles = pipe_flag(rStep, "FillHoles", true);
+        opts.mSplitNonManifold = pipe_flag(rStep, "SplitNonManifold", true);
+        opts.mMaxHoleEdges = static_cast<std::int64_t>(pipe_number(rStep, "MaxHoleEdges", 10));
+        opts.mWeldTolerance = pipe_number(rStep, "WeldTolerance", 0.0);
+        opts.mRecordProvenance = pipe_flag(rStep, "RecordProvenance", false);
+        RepairResult rr = repair(mesh, opts);
+        pipe_push_step(rReport, rStep,
+                       {{"NumFlipped", static_cast<double>(rr.mNumFlipped)},
+                        {"NumComponents", static_cast<double>(rr.mNumComponents)},
+                        {"NumVerticesSplit", static_cast<double>(rr.mNumVerticesSplit)},
+                        {"NumHolesFilled", static_cast<double>(rr.mNumHolesFilled)},
+                        {"NumHolesSkipped", static_cast<double>(rr.mNumHolesSkipped)},
+                        {"NumFacesAdded", static_cast<double>(rr.mNumFacesAdded)},
+                        {"NumPointsAdded", static_cast<double>(rr.mNumPointsAdded)},
+                        {"PointsWelded", static_cast<double>(rr.mPointsWelded)}});
+        // What repair could NOT fix is worth saying: a component whose
+        // orientation has no consistent assignment, and non-manifold edges,
+        // which are counted rather than split.
+        if (rr.mNumUnorientable > 0)
+            rReport.mWarnings.push_back(
+                "repair: " + std::to_string(rr.mNumUnorientable) +
+                " component(s) are not orientable; their winding is a best effort");
+        if (rr.mQualityAfter.mNonManifoldEdges > 0)
+            rReport.mWarnings.push_back(
+                "repair: " + std::to_string(rr.mQualityAfter.mNonManifoldEdges) +
+                " non-manifold edge(s) remain; repair counts them, it does not split them");
+        return std::move(rr.mMesh);
+    }
+    if (op == "SobolevDeform") {
+        SobolevOptions opts;
+        opts.mArrayName = pipe_text(rStep, "Array", "");
+        opts.mLengthScale = pipe_number(rStep, "LengthScale", 0.0);
+        opts.mFixedPointsArray = pipe_text(rStep, "FixedPointsArray", "");
+        opts.mFixBoundary = pipe_flag(rStep, "FixBoundary", false);
+        opts.mRecordFiltered = pipe_flag(rStep, "RecordFiltered", false);
+        opts.mMaxIterations = static_cast<int>(pipe_number(rStep, "MaxIterations", 128));
+        opts.mTolerance = pipe_number(rStep, "Tolerance", 1e-10);
+        SobolevResult sr = sobolev_deform(mesh, opts);
+        pipe_push_step(rReport, rStep,
+                       {{"NumIterations", static_cast<double>(sr.mNumIterations)},
+                        {"Residual", sr.mResidual},
+                        {"Converged", sr.mConverged ? 1.0 : 0.0},
+                        {"NumFixed", static_cast<double>(sr.mNumFixed)},
+                        {"NumIsolated", static_cast<double>(sr.mNumIsolated)},
+                        {"MaxDisplacement", sr.mMaxDisplacement}});
+        if (!sr.mConverged)
+            rReport.mWarnings.push_back("sobolev_deform: conjugate gradients did not converge in " +
+                                        std::to_string(sr.mNumIterations) +
+                                        " iteration(s); the last iterate is returned");
+        return std::move(sr.mMesh);
     }
     if (op == "EstimateError") {
         // A pure data step: geometry is untouched, so the pipeline carries the
@@ -757,8 +824,8 @@ Mesh apply_pipeline_step(Mesh mesh, const PipelineStep& rStep, PipelineReport& r
              {"NumNonManifoldVertices", static_cast<double>(rr.mNumNonManifoldVertices)}});
         if (rr.mNumIsolatedClusters > 0 || rr.mNumNonManifoldVertices > 0)
             rReport.mWarnings.push_back(
-                "remesh: " + std::to_string(rr.mNumIsolatedClusters) +
-                " isolated cluster(s), " + std::to_string(rr.mNumNonManifoldVertices) +
+                "remesh: " + std::to_string(rr.mNumIsolatedClusters) + " isolated cluster(s), " +
+                std::to_string(rr.mNumNonManifoldVertices) +
                 " non-manifold vertex/vertices could not be repaired; output may be "
                 "non-manifold near them");
         return std::move(rr.mMesh);

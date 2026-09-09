@@ -349,6 +349,91 @@ struct _CCurvatureReport
     reserved::NTuple{4,Int64}
 end
 
+"""
+Mirror of C `mio_repair_opts`. Field order, types and the trailing `reserved`
+padding are ABI. Every pass defaults ON, so an all-zero struct is NOT the
+default; build one through [`repair`](@ref).
+"""
+struct _CRepairOpts
+    fix_orientation::Int32
+    orient_outward::Int32
+    fill_holes::Int32
+    split_non_manifold::Int32
+    record_provenance::Int32
+    reserved_pad::Int32
+    max_hole_edges::Int64
+    weld_tolerance::Cdouble
+    reserved::NTuple{5,Int64}
+end
+
+"""Mirror of C `mio_repair_report`."""
+struct _CRepairReport
+    quality_before::_CSurfaceQuality
+    quality_after::_CSurfaceQuality
+    num_flipped::Int64
+    num_components::Int64
+    largest_component::Int64
+    num_oriented_outward::Int64
+    num_unorientable::Int64
+    num_vertices_split::Int64
+    num_holes_detected::Int64
+    num_holes_filled::Int64
+    num_holes_skipped::Int64
+    num_faces_added::Int64
+    num_points_added::Int64
+    points_welded::Int64
+    reserved::NTuple{4,Int64}
+end
+
+"""Mirror of C `mio_shrinkwrap_opts`."""
+struct _CShrinkwrapOpts
+    weights::Cstring
+    target_region::Cstring
+    offset::Cdouble
+    max_distance::Cdouble
+    grid_cell_size::Cdouble
+    normal_weight::Int32
+    record_distance::Int32
+    record_closest_cell::Int32
+    reserved_pad::Int32
+    reserved::NTuple{5,Int64}
+end
+
+"""Mirror of C `mio_shrinkwrap_report`."""
+struct _CShrinkwrapReport
+    quality::_CSurfaceQuality
+    num_projected::Int64
+    num_missed::Int64
+    num_skipped::Int64
+    max_displacement::Cdouble
+    reserved::NTuple{4,Int64}
+end
+
+"""Mirror of C `mio_sobolev_opts`."""
+struct _CSobolevOpts
+    array::Cstring
+    fixed_points_array::Cstring
+    length_scale::Cdouble
+    tolerance::Cdouble
+    max_iterations::Int32
+    fix_boundary::Int32
+    record_filtered::Int32
+    reserved_pad::Int32
+    reserved::NTuple{5,Int64}
+end
+
+"""Mirror of C `mio_sobolev_report`."""
+struct _CSobolevReport
+    num_iterations::Int64
+    num_fixed::Int64
+    num_isolated::Int64
+    residual::Cdouble
+    max_displacement::Cdouble
+    converged::Int32
+    reserved_pad::Int32
+    reserved::NTuple{4,Int64}
+end
+
 """Mirror of C `mio_remesh_report`."""
 struct _CRemeshReport
     num_clusters::Int64
@@ -418,6 +503,18 @@ function _check_abi_layout()
         error("meshio++: mio_curvature_opts layout mismatch ($(sizeof(_CCurvatureOpts)) bytes)")
     sizeof(_CCurvatureReport) == 136 ||
         error("meshio++: mio_curvature_report layout mismatch ($(sizeof(_CCurvatureReport)) bytes)")
+    sizeof(_CRepairOpts) == 80 ||
+        error("meshio++: mio_repair_opts layout mismatch ($(sizeof(_CRepairOpts)) bytes)")
+    sizeof(_CRepairReport) == 272 ||
+        error("meshio++: mio_repair_report layout mismatch ($(sizeof(_CRepairReport)) bytes)")
+    sizeof(_CShrinkwrapOpts) == 96 ||
+        error("meshio++: mio_shrinkwrap_opts layout mismatch ($(sizeof(_CShrinkwrapOpts)) bytes)")
+    sizeof(_CShrinkwrapReport) == 136 ||
+        error("meshio++: mio_shrinkwrap_report layout mismatch ($(sizeof(_CShrinkwrapReport)) bytes)")
+    sizeof(_CSobolevOpts) == 88 ||
+        error("meshio++: mio_sobolev_opts layout mismatch ($(sizeof(_CSobolevOpts)) bytes)")
+    sizeof(_CSobolevReport) == 80 ||
+        error("meshio++: mio_sobolev_report layout mismatch ($(sizeof(_CSobolevReport)) bytes)")
     sizeof(_CRemeshOpts) == 120 ||
         error("meshio++: mio_remesh_opts layout mismatch ($(sizeof(_CRemeshOpts)) bytes)")
     sizeof(_CRemeshReport) == 72 ||

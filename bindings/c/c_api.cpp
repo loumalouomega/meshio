@@ -63,6 +63,9 @@
 #include "meshioplusplus/operations/clean.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
 #include "meshioplusplus/operations/curvature.hpp"
+#include "meshioplusplus/operations/repair.hpp"
+#include "meshioplusplus/operations/shrinkwrap.hpp"
+#include "meshioplusplus/operations/sobolev_deform.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/data_calc.hpp"
@@ -4306,8 +4309,7 @@ mio_mesh* mio_compute_curvature(const mio_mesh* mesh, const mio_curvature_opts* 
             if (opts->region)
                 options.mRegion = opts->region;
         }
-        meshioplusplus::CurvatureResult r =
-            meshioplusplus::compute_curvature(mesh->mMesh, options);
+        meshioplusplus::CurvatureResult r = meshioplusplus::compute_curvature(mesh->mMesh, options);
         if (report) {
             *report = mio_curvature_report{};
             capi_fill_quality(r.mQuality, &report->quality);
@@ -4315,6 +4317,147 @@ mio_mesh* mio_compute_curvature(const mio_mesh* mesh, const mio_curvature_opts* 
             report->num_isolated = r.mNumIsolated;
             report->num_degenerate = r.mNumDegenerate;
             report->total_angle_defect = r.mTotalAngleDefect;
+        }
+        return new mio_mesh{std::move(r.mMesh)};
+    });
+}
+
+static_assert(sizeof(mio_repair_opts) == 80, "mio_repair_opts grew outside its reserved tail");
+static_assert(sizeof(mio_repair_report) == 272, "mio_repair_report grew outside its reserved tail");
+static_assert(sizeof(mio_shrinkwrap_opts) == 96,
+              "mio_shrinkwrap_opts grew outside its reserved tail");
+static_assert(sizeof(mio_shrinkwrap_report) == 136,
+              "mio_shrinkwrap_report grew outside its reserved tail");
+static_assert(sizeof(mio_sobolev_opts) == 88, "mio_sobolev_opts grew outside its reserved tail");
+static_assert(sizeof(mio_sobolev_report) == 80,
+              "mio_sobolev_report grew outside its reserved tail");
+
+void mio_repair_opts_init(mio_repair_opts* opts) {
+    if (!opts)
+        return;
+    *opts = mio_repair_opts{};
+    opts->fix_orientation = 1;
+    opts->orient_outward = 1;
+    opts->fill_holes = 1;
+    opts->split_non_manifold = 1;
+    opts->max_hole_edges = 10;
+}
+
+mio_mesh* mio_repair(const mio_mesh* mesh, const mio_repair_opts* opts, mio_repair_report* report) {
+    return guarded_ptr(static_cast<mio_mesh*>(nullptr), [&]() -> mio_mesh* {
+        if (!mesh)
+            throw meshioplusplus::ReadError("meshio++: mesh is NULL");
+        meshioplusplus::RepairOptions options;
+        if (opts) {
+            options.mFixOrientation = opts->fix_orientation != 0;
+            options.mOrientOutward = opts->orient_outward != 0;
+            options.mFillHoles = opts->fill_holes != 0;
+            options.mSplitNonManifold = opts->split_non_manifold != 0;
+            options.mRecordProvenance = opts->record_provenance != 0;
+            options.mMaxHoleEdges = opts->max_hole_edges;
+            options.mWeldTolerance = opts->weld_tolerance;
+        }
+        meshioplusplus::RepairResult r = meshioplusplus::repair(mesh->mMesh, options);
+        if (report) {
+            *report = mio_repair_report{};
+            capi_fill_quality(r.mQualityBefore, &report->quality_before);
+            capi_fill_quality(r.mQualityAfter, &report->quality_after);
+            report->num_flipped = r.mNumFlipped;
+            report->num_components = r.mNumComponents;
+            report->largest_component = r.mLargestComponent;
+            report->num_oriented_outward = r.mNumOrientedOutward;
+            report->num_unorientable = r.mNumUnorientable;
+            report->num_vertices_split = r.mNumVerticesSplit;
+            report->num_holes_detected = r.mNumHolesDetected;
+            report->num_holes_filled = r.mNumHolesFilled;
+            report->num_holes_skipped = r.mNumHolesSkipped;
+            report->num_faces_added = r.mNumFacesAdded;
+            report->num_points_added = r.mNumPointsAdded;
+            report->points_welded = r.mPointsWelded;
+        }
+        return new mio_mesh{std::move(r.mMesh)};
+    });
+}
+
+void mio_shrinkwrap_opts_init(mio_shrinkwrap_opts* opts) {
+    if (!opts)
+        return;
+    *opts = mio_shrinkwrap_opts{};
+    opts->normal_weight = MIO_SDF_WEIGHT_ANGLE;
+}
+
+mio_mesh* mio_shrinkwrap(const mio_mesh* mesh, const mio_mesh* target,
+                         const mio_shrinkwrap_opts* opts, mio_shrinkwrap_report* report) {
+    return guarded_ptr(static_cast<mio_mesh*>(nullptr), [&]() -> mio_mesh* {
+        if (!mesh || !target)
+            throw meshioplusplus::ReadError("meshio++: mesh is NULL");
+        meshioplusplus::ShrinkwrapOptions options;
+        if (opts) {
+            if (opts->weights)
+                options.mWeights = opts->weights;
+            if (opts->target_region)
+                options.mTargetRegion = opts->target_region;
+            options.mOffset = opts->offset;
+            options.mMaxDistance = opts->max_distance;
+            options.mGridCellSize = opts->grid_cell_size;
+            if (opts->normal_weight < 0 || opts->normal_weight > MIO_SDF_WEIGHT_AREA)
+                throw std::invalid_argument(
+                    "meshio++: shrinkwrap: normal_weight must be MIO_SDF_WEIGHT_ANGLE or "
+                    "MIO_SDF_WEIGHT_AREA");
+            options.mNormalWeight = opts->normal_weight == MIO_SDF_WEIGHT_AREA
+                                        ? meshioplusplus::SdfPseudonormalWeight::Area
+                                        : meshioplusplus::SdfPseudonormalWeight::Angle;
+            options.mRecordDistance = opts->record_distance != 0;
+            options.mRecordClosestCell = opts->record_closest_cell != 0;
+        }
+        meshioplusplus::ShrinkwrapResult r =
+            meshioplusplus::shrinkwrap(mesh->mMesh, target->mMesh, options);
+        if (report) {
+            *report = mio_shrinkwrap_report{};
+            capi_fill_quality(r.mQuality, &report->quality);
+            report->num_projected = r.mNumProjected;
+            report->num_missed = r.mNumMissed;
+            report->num_skipped = r.mNumSkipped;
+            report->max_displacement = r.mMaxDisplacement;
+        }
+        return new mio_mesh{std::move(r.mMesh)};
+    });
+}
+
+void mio_sobolev_opts_init(mio_sobolev_opts* opts) {
+    if (!opts)
+        return;
+    *opts = mio_sobolev_opts{};
+    opts->max_iterations = 128;
+    opts->tolerance = 1e-10;
+}
+
+mio_mesh* mio_sobolev_deform(const mio_mesh* mesh, const mio_sobolev_opts* opts,
+                             mio_sobolev_report* report) {
+    return guarded_ptr(static_cast<mio_mesh*>(nullptr), [&]() -> mio_mesh* {
+        if (!mesh)
+            throw meshioplusplus::ReadError("meshio++: mesh is NULL");
+        if (!opts || !opts->array)
+            throw std::invalid_argument(
+                "meshio++: sobolev_deform: opts->array (the displacement array name) is required");
+        meshioplusplus::SobolevOptions options;
+        options.mArrayName = opts->array;
+        if (opts->fixed_points_array)
+            options.mFixedPointsArray = opts->fixed_points_array;
+        options.mLengthScale = opts->length_scale;
+        options.mTolerance = opts->tolerance;
+        options.mMaxIterations = opts->max_iterations;
+        options.mFixBoundary = opts->fix_boundary != 0;
+        options.mRecordFiltered = opts->record_filtered != 0;
+        meshioplusplus::SobolevResult r = meshioplusplus::sobolev_deform(mesh->mMesh, options);
+        if (report) {
+            *report = mio_sobolev_report{};
+            report->num_iterations = r.mNumIterations;
+            report->num_fixed = r.mNumFixed;
+            report->num_isolated = r.mNumIsolated;
+            report->residual = r.mResidual;
+            report->max_displacement = r.mMaxDisplacement;
+            report->converged = r.mConverged ? 1 : 0;
         }
         return new mio_mesh{std::move(r.mMesh)};
     });

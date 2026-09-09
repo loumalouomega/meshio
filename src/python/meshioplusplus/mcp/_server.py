@@ -962,6 +962,177 @@ def _register_operations(server: FastMCP) -> None:
         )
 
     @server.tool()
+    def repair(
+        input_path: str,
+        output_path: str,
+        input_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        fix_orientation: bool = True,
+        orient_outward: bool = True,
+        fill_holes: bool = True,
+        split_non_manifold: bool = True,
+        max_hole_edges: int = 10,
+        weld_tolerance: float = 0.0,
+        record_provenance: bool = False,
+    ) -> dict:
+        """Repair a surface mesh's orientation, holes and pinched vertices --
+        the three defects `clean` does not touch (it welds, drops degenerate
+        and duplicate cells, and prunes orphans; it never rewinds a triangle
+        or closes a hole).
+
+        The passes run in order: weld (opt-in, `weld_tolerance`) ->
+        triangulate (quads and polygons fan exactly as convert_cells
+        simplexify does, blocks staying 1:1) -> split bowties (a vertex whose
+        triangle star is edge-disconnected is duplicated, geometry unchanged)
+        -> orient (a BFS per connected component by the TOPOLOGICAL half-edge
+        rule -- two triangles sharing an edge agree iff they traverse it in
+        opposite directions, which is exact where a normal-angle test
+        mis-orients across a sharp crease; fewest flips wins ties) -> fill
+        holes (every traceable boundary loop of at most max_hole_edges edges,
+        `<= 0` for no limit, gets one centroid point and one triangle per loop
+        edge, wound to AGREE with the surrounding surface) -> orient outward
+        (every closed component whose signed volume is negative is flipped
+        whole). Lower-dimensional blocks (boundary lines) ride along; fill
+        triangles land in one trailing triangle block, added only when there
+        is one, so a closed input keeps its block count.
+
+        Reports the input's and the output's defect counts, so what was fixed
+        and what remains are both visible. Non-manifold EDGES (used by three or
+        more triangles) are neither split nor crossed -- they are counted;
+        nested cavities are not detected, so every closed component is
+        oriented outward on its own. Point and Cell regions survive (a split
+        copy joins its source's); Side regions are dropped, since a flip
+        permutes a triangle's edge numbering."""
+        return _guard(
+            _tools.tool_repair,
+            input_path=input_path,
+            output_path=output_path,
+            input_format=input_format,
+            output_format=output_format,
+            fix_orientation=fix_orientation,
+            orient_outward=orient_outward,
+            fill_holes=fill_holes,
+            split_non_manifold=split_non_manifold,
+            max_hole_edges=max_hole_edges,
+            weld_tolerance=weld_tolerance,
+            record_provenance=record_provenance,
+        )
+
+    @server.tool()
+    def shrinkwrap(
+        input_path: str,
+        target_path: str,
+        output_path: str,
+        input_format: Optional[str] = None,
+        target_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        offset: float = 0.0,
+        max_distance: float = 0.0,
+        weights: str = "",
+        target_region: str = "",
+        normal_weight: str = "angle",
+        record_distance: bool = False,
+        record_closest_cell: bool = False,
+    ) -> dict:
+        """Project a mesh's points onto a target triangle surface:
+        x' = x + w (p + offset*n - x), with p the closest point on the target
+        and n the unit pseudonormal there -- the fitting step a scanned skin, a
+        CAD shell or a coarse solve needs before it can be used as a template.
+
+        It is ONE projection, not an iteration: there is no self-intersection
+        guard and no inversion guard, because a wrap is a fit and not a
+        smoothing. Every point of the input moves whatever cells it carries --
+        a volume mesh's interior points are projected too; only the TARGET must
+        be a surface (quads and polygons are fanned, a volume or higher-order
+        block is refused by name). Use `weights` to select or blend: an
+        integer/bool point_data array selects (nonzero moves), a float one
+        blends, applied unclamped so a caller can overshoot on purpose. A
+        point farther than max_distance (`<= 0` means unlimited) is left where
+        it is and counted, as is one whose hit feature has no direction to
+        offset along.
+
+        The offset goes along the pseudonormal of the hit FEATURE (face, edge
+        or vertex), not of the selected triangle: at a crease the offset
+        surface's normal is the bisector, so a face normal would land the
+        point off that surface and make the result depend on which of two
+        equidistant faces won the tie-break. Connectivity, data, regions and
+        property sets pass through verbatim, and the points keep their
+        dtype."""
+        return _guard(
+            _tools.tool_shrinkwrap,
+            input_path=input_path,
+            target_path=target_path,
+            output_path=output_path,
+            input_format=input_format,
+            target_format=target_format,
+            output_format=output_format,
+            offset=offset,
+            max_distance=max_distance,
+            weights=weights,
+            target_region=target_region,
+            normal_weight=normal_weight,
+            record_distance=record_distance,
+            record_closest_cell=record_closest_cell,
+        )
+
+    @server.tool()
+    def sobolev_deform(
+        input_path: str,
+        output_path: str,
+        array: str,
+        length_scale: float,
+        input_format: Optional[str] = None,
+        output_format: Optional[str] = None,
+        fixed_points_array: str = "",
+        fix_boundary: bool = False,
+        record_filtered: bool = False,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+    ) -> dict:
+        """Sobolev (Helmholtz-filtered) deformation: smooth a raw per-point
+        displacement field through the mesh's own P1 finite-element operators,
+        then move the points by the smoothed field.
+
+        Solves (M + l^2 K) u = M d per ambient component and sets x' = x + u,
+        with K the P1 stiffness matrix assembled from the simplex edge Gram
+        matrix, M a uniform vertex mass and l = length_scale -- a
+        screened-Poisson low-pass filter whose cutoff wavelength is l, which
+        is what turns a jagged per-node displacement (a shape gradient, a
+        scattered measurement, a model's raw output) into one a mesh can
+        follow without tangling. length_scale = 0 applies the raw field at the
+        free points.
+
+        `array` names the (n, dim) point_data displacement. Every cell block
+        at the mesh's top topological dimension must be a linear simplex --
+        line, triangle or tetra -- since that is what the assembly is defined
+        on; a quadratic block is refused naming linearize, anything else
+        naming convert_cells(simplexify). Lower-dimensional blocks ride along,
+        and a point in no top-dimensional cell receives its raw displacement.
+
+        Nothing is pinned by default: an unfixed boundary carries the natural
+        Neumann condition, so a constant displacement is preserved exactly.
+        fixed_points_array (an integer/bool point_data mask) and fix_boundary
+        impose zero-Dirichlet rows instead. Non-convergence within
+        max_iterations is reported through `converged` with the last iterate
+        returned -- a partially smoothed field is still usable, and `residual`
+        says how far it got. This is a pure coordinate move: connectivity,
+        every data array, regions and property sets pass through."""
+        return _guard(
+            _tools.tool_sobolev_deform,
+            input_path=input_path,
+            output_path=output_path,
+            array=array,
+            length_scale=length_scale,
+            input_format=input_format,
+            output_format=output_format,
+            fixed_points_array=fixed_points_array,
+            fix_boundary=fix_boundary,
+            record_filtered=record_filtered,
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+        )
+
+    @server.tool()
     def estimate_error(
         input_path: str,
         output_path: str,

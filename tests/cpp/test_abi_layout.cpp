@@ -73,6 +73,9 @@
 #include "meshioplusplus/operations/remesh_volume.hpp"
 #include "meshioplusplus/operations/optimize_volume.hpp"
 #include "meshioplusplus/operations/curvature.hpp"
+#include "meshioplusplus/operations/repair.hpp"
+#include "meshioplusplus/operations/shrinkwrap.hpp"
+#include "meshioplusplus/operations/sobolev_deform.hpp"
 #include "meshioplusplus/operations/smooth.hpp"
 #include "meshioplusplus/operations/voxelize.hpp"
 #include "meshioplusplus/detail/grid_lattice.hpp"
@@ -214,6 +217,17 @@ MIO_ABI_LAYOUT(meshioplusplus::OptimizeVolumeOptions, 40, 8);
 // unpinned "looks free" to grow, then does). CurvatureResult is deliberately
 // NOT pinned, embedding a `Mesh` like every other *Result.
 MIO_ABI_LAYOUT(meshioplusplus::CurvatureOptions, 40, 8);
+
+// The v10.38.0 trio, pinned from the release that introduces them for the
+// same reason. RepairOptions: five bools, an int64 and a double (24/8).
+// ShrinkwrapOptions: two doubles, two strings, an enum with NO fixed
+// underlying type (4 bytes -- giving SdfPseudonormalWeight one would shrink
+// this and the pin would say so), two bools and a double (96/8).
+// SobolevOptions: a string, a double, a vector, a string, two bools, an int
+// and a double (112/8). Every *Result is unpinned, embedding a `Mesh`.
+MIO_ABI_LAYOUT(meshioplusplus::RepairOptions, 24, 8);
+MIO_ABI_LAYOUT(meshioplusplus::ShrinkwrapOptions, 96, 8);
+MIO_ABI_LAYOUT(meshioplusplus::SobolevOptions, 112, 8);
 
 // SmoothOptions is passed by const-ref through the exported `smooth()`, and
 // is pinned here for the FIRST time -- not because it grew a member (it

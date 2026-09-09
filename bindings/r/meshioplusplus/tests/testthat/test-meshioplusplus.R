@@ -1026,3 +1026,109 @@ test_that("remesh_volume retetrahedralizes by isosurface stuffing", {
   # Neither resolution nor cell_size given is rejected by name.
   expect_error(mio_remesh_volume(cube))
 })
+
+test_that("repair rewinds, fills and splits a surface", {
+  # The cube surface with two facets flipped: exactly those two are rewound
+  # and the output is watertight with no point added.
+  conn <- matrix(c(
+    1, 3, 2, 1, 4, 3, 5, 6, 7, 5, 7, 8,
+    1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6,
+    3, 4, 8, 3, 8, 7, 4, 1, 5, 4, 5, 8
+  ), nrow = 3)
+  broken <- conn
+  broken[2:3, 1] <- broken[3:2, 1]
+  broken[2:3, 9] <- broken[3:2, 9]
+  m <- mio_mesh()
+  on.exit(mio_release(m))
+  mio_set_points(m, matrix(c(
+    0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
+    0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1
+  ), nrow = 3))
+  mio_add_cell_block(m, "triangle", broken)
+  r <- mio_repair(m)
+  on.exit(mio_release(r$mesh), add = TRUE)
+  expect_gt(r$quality_before$inconsistent_pairs, 0)
+  expect_true(r$quality_after$watertight)
+  expect_equal(r$num_flipped, 2)
+  expect_equal(r$num_components, 1)
+  expect_equal(r$num_holes_detected, 0)
+  expect_equal(mio_num_points(r$mesh), 8)
+
+  # Minus one facet: the hole is filled by a centroid fan in a trailing block.
+  h <- mio_mesh()
+  on.exit(mio_release(h), add = TRUE)
+  mio_set_points(h, mio_points(m))
+  mio_add_cell_block(h, "triangle", conn[, -1])
+  f <- mio_repair(h)
+  on.exit(mio_release(f$mesh), add = TRUE)
+  expect_equal(f$num_holes_filled, 1)
+  expect_equal(f$num_faces_added, 3)
+  expect_equal(f$num_points_added, 1)
+  expect_true(f$quality_after$watertight)
+  expect_equal(mio_num_cell_blocks(f$mesh), 2)
+  g <- mio_repair(h, fill_holes = FALSE)
+  on.exit(mio_release(g$mesh), add = TRUE)
+  expect_equal(g$num_holes_detected, 0)
+  expect_equal(g$quality_after$boundary_edges, 3)
+})
+
+test_that("shrinkwrap projects points onto a target surface", {
+  target <- mio_mesh()
+  on.exit(mio_release(target))
+  mio_set_points(target, matrix(c(0, 0, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0), nrow = 3))
+  mio_add_cell_block(target, "triangle", matrix(c(1, 2, 3, 1, 3, 4), nrow = 3))
+  cloud <- mio_mesh()
+  on.exit(mio_release(cloud), add = TRUE)
+  mio_set_points(cloud, matrix(c(1, 1, 0.5, 2, 2, -0.7, 3, 1, 1.5), nrow = 3))
+  mio_add_cell_block(cloud, "vertex", matrix(c(1, 2, 3), nrow = 1))
+  mio_add_point_data(cloud, "w", c(1, 0.5, 1))
+  w <- mio_shrinkwrap(cloud, target, offset = 0.25, weights = "w", record_distance = TRUE)
+  on.exit(mio_release(w$mesh), add = TRUE)
+  expect_equal(w$num_projected, 3)
+  expect_equal(w$num_skipped, 0)
+  expect_equal(w$quality$boundary_edges, 4)
+  p <- mio_points(w$mesh)
+  expect_equal(p[3, 1], 0.25, tolerance = 1e-14)
+  expect_equal(p[3, 2], -0.7 + 0.5 * (0.25 + 0.7), tolerance = 1e-14)
+  expect_true("shrinkwrap:distance" %in% mio_point_data_names(w$mesh))
+  expect_error(mio_shrinkwrap(cloud, target, normal_weight = "nope"))
+})
+
+test_that("sobolev_deform filters a displacement field", {
+  n <- 4
+  pts <- matrix(0, nrow = 3, ncol = n * n)
+  disp <- matrix(0, nrow = 3, ncol = n * n)
+  for (j in 0:(n - 1)) for (i in 0:(n - 1)) {
+    pts[, j * n + i + 1] <- c(i, j, 0)
+    disp[3, j * n + i + 1] <- if ((i + j) %% 2 == 1) 0.1 else -0.1
+  }
+  conn <- c()
+  for (j in 0:(n - 2)) for (i in 0:(n - 2)) {
+    a <- j * n + i + 1
+    conn <- c(conn, a, a + 1, a + n + 1, a, a + n + 1, a + n)
+  }
+  m <- mio_mesh()
+  on.exit(mio_release(m))
+  mio_set_points(m, pts)
+  mio_add_cell_block(m, "triangle", matrix(conn, nrow = 3))
+  mio_add_point_data(m, "d", disp)
+  pin <- numeric(n * n)
+  pin[1] <- 1
+  mio_add_point_data(m, "pin", pin)
+  s <- mio_sobolev_deform(m, "d", 2.0, fixed_points_array = "pin", record_filtered = TRUE)
+  on.exit(mio_release(s$mesh), add = TRUE)
+  expect_true(s$converged)
+  expect_gt(s$num_iterations, 0)
+  expect_equal(s$num_fixed, 1)
+  expect_equal(s$num_isolated, 0)
+  expect_true(s$max_displacement > 0 && s$max_displacement < 0.1)
+  expect_equal(mio_points(s$mesh)[3, 1], 0)
+  expect_true("sobolev:displacement" %in% mio_point_data_names(s$mesh))
+  # A constant field with nothing pinned is preserved exactly, zero iterations.
+  mio_add_point_data(m, "c", matrix(0.4, nrow = 3, ncol = n * n))
+  k <- mio_sobolev_deform(m, "c", 2.0)
+  on.exit(mio_release(k$mesh), add = TRUE)
+  expect_equal(k$num_iterations, 0)
+  expect_equal(mio_points(k$mesh)[1, ], pts[1, ] + 0.4)
+  expect_error(mio_sobolev_deform(m, "missing", 1.0))
+})

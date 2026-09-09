@@ -1073,4 +1073,104 @@ end
     close(cube)
 end
 
+@testset "operations: repair, shrinkwrap, sobolev_deform" begin
+    # The unit cube surface with two facets flipped: repair rewinds exactly
+    # those and reports a watertight output; minus one facet, the hole is
+    # filled by a centroid fan in a trailing block.
+    conn = Int64[1 1 5 5 1 1 2 2 3 3 4 4;
+                 3 4 6 7 2 6 3 7 4 8 1 5;
+                 2 3 7 8 6 5 7 6 8 7 5 8]
+    broken = copy(conn)
+    broken[2, 1], broken[3, 1] = broken[3, 1], broken[2, 1]
+    broken[2, 9], broken[3, 9] = broken[3, 9], broken[2, 9]
+    cube = Mesh()
+    set_points!(cube, Float64[0 1 1 0 0 1 1 0; 0 0 1 1 0 0 1 1; 0 0 0 0 1 1 1 1])
+    add_cell_block!(cube, "triangle", broken)
+    r = repair(cube)
+    @test r.quality_before.inconsistent_pairs > 0
+    @test r.quality_after.watertight
+    @test r.num_flipped == 2
+    @test r.num_components == 1
+    @test r.num_holes_detected == 0
+    @test num_points(r.mesh) == 8
+    close(r.mesh)
+    close(cube)
+
+    holed = Mesh()
+    set_points!(holed, Float64[0 1 1 0 0 1 1 0; 0 0 1 1 0 0 1 1; 0 0 0 0 1 1 1 1])
+    add_cell_block!(holed, "triangle", conn[:, 2:end])
+    h = repair(holed)
+    @test h.num_holes_filled == 1
+    @test h.num_faces_added == 3
+    @test h.num_points_added == 1
+    @test h.quality_after.watertight
+    @test num_cell_blocks(h.mesh) == 2
+    close(h.mesh)
+    h2 = repair(holed; fill_holes=false)
+    @test h2.num_holes_detected == 0
+    @test h2.quality_after.boundary_edges == 3
+    close(h2.mesh)
+    close(holed)
+
+    # Shrinkwrap three points onto the z = 0 square with an offset; a float
+    # weights array blends the second one halfway.
+    target = Mesh()
+    set_points!(target, Float64[0 4 4 0; 0 0 4 4; 0 0 0 0])
+    add_cell_block!(target, "triangle", Int64[1 1; 2 3; 3 4])
+    cloud = Mesh()
+    set_points!(cloud, Float64[1 2 3; 1 2 1; 0.5 -0.7 1.5])
+    add_cell_block!(cloud, "vertex", Int64[1 2 3])
+    add_point_data!(cloud, "w", Float64[1.0, 0.5, 1.0])
+    w = shrinkwrap(cloud, target; offset=0.25, weights="w", record_distance=true)
+    @test w.num_projected == 3
+    @test w.num_skipped == 0
+    @test w.quality.boundary_edges == 4
+    p = points(w.mesh)
+    @test p[3, 1] ≈ 0.25 atol=1e-15
+    @test p[3, 2] ≈ -0.7 + 0.5 * (0.25 + 0.7) atol=1e-15
+    @test p[3, 3] ≈ 0.25 atol=1e-15
+    close(w.mesh)
+    @test_throws ArgumentError shrinkwrap(cloud, target; normal_weight=:nope)
+    close(cloud)
+    close(target)
+
+    # Sobolev: a checkerboard on a triangle grid is damped, a pinned corner
+    # stays, and a constant field is preserved exactly in zero iterations.
+    n = 4
+    gp = zeros(3, n * n)
+    d = zeros(3, n * n)
+    for j in 0:n-1, i in 0:n-1
+        gp[:, j*n+i+1] = [i, j, 0.0]
+        d[3, j*n+i+1] = isodd(i + j) ? 0.1 : -0.1
+    end
+    gc = Int64[]
+    for j in 0:n-2, i in 0:n-2
+        a = j * n + i + 1
+        append!(gc, [a, a + 1, a + n + 1, a, a + n + 1, a + n])
+    end
+    gridm = Mesh()
+    set_points!(gridm, gp)
+    add_cell_block!(gridm, "triangle", reshape(gc, 3, :))
+    add_point_data!(gridm, "d", d)
+    pin = zeros(n * n); pin[1] = 1.0
+    add_point_data!(gridm, "pin", pin)
+    s = sobolev_deform(gridm, "d", 2.0; fixed_points_array="pin", record_filtered=true)
+    @test s.converged
+    @test s.num_iterations > 0
+    @test s.num_fixed == 1
+    @test s.num_isolated == 0
+    @test 0.0 < s.max_displacement < 0.1
+    sp = points(s.mesh)
+    @test sp[3, 1] == 0.0
+    @test num_point_data(s.mesh) == 3
+    close(s.mesh)
+    add_point_data!(gridm, "c", fill(0.4, 3, n * n))
+    c = sobolev_deform(gridm, "c", 2.0)
+    @test c.num_iterations == 0
+    @test all(points(c.mesh)[1, :] .== gp[1, :] .+ 0.4)
+    close(c.mesh)
+    @test_throws MeshioError sobolev_deform(gridm, "missing", 1.0)
+    close(gridm)
+end
+
 end # testset

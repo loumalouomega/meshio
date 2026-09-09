@@ -1184,8 +1184,7 @@ TEST(CApi, DataNullArgumentsAreRejected) {
 TEST(CApi, DataIntegrateHandle) {
     mio_mesh* m = build_data_mesh();  // cell_data "mat" = {10.0, 20.0} over 2 tets
     const int64_t region_cells[1] = {0};
-    ASSERT_EQ(mio_mesh_add_region(m, "one_cell", MIO_REGION_CELL, -1, -1, region_cells, 1),
-              MIO_OK);
+    ASSERT_EQ(mio_mesh_add_region(m, "one_cell", MIO_REGION_CELL, -1, -1, region_cells, 1), MIO_OK);
 
     const char* names[] = {"mat"};
     mio_data_integrate* result = mio_data_integrate_create(m, names, 1);
@@ -1223,9 +1222,9 @@ TEST(CApi, DataIntegrateHandle) {
     ASSERT_EQ(mio_data_integrate_region_entry(result, 0, 0, &rentry), MIO_OK);
     EXPECT_EQ(rentry.num_cells, 1);
     double rtotal = 0;
-    ASSERT_EQ(mio_data_integrate_region_component(result, 0, 0, 0, &rtotal, nullptr, nullptr,
-                                                   nullptr),
-              MIO_OK);
+    ASSERT_EQ(
+        mio_data_integrate_region_component(result, 0, 0, 0, &rtotal, nullptr, nullptr, nullptr),
+        MIO_OK);
     EXPECT_LT(rtotal, total);  // one cell contributes less than both
 
     // Out-of-range indices are rejected, not dereferenced.
@@ -1742,10 +1741,10 @@ TEST(CApi, SmoothOdtMovesATetVertexTowardItsCircumcenter) {
 
     std::int64_t moved = -1, skipped = -1;
     double max_disp = -1.0;
-    mio_mesh* out = mio_smooth(m, "odt", /*iterations=*/1, /*lambda=*/-1.0, /*mu=*/-0.34,
-                               /*fix_boundary=*/0, /*preserve_features=*/0,
-                               /*feature_angle=*/30.0, /*guard_inversion=*/1, &moved, &max_disp,
-                               &skipped);
+    mio_mesh* out =
+        mio_smooth(m, "odt", /*iterations=*/1, /*lambda=*/-1.0, /*mu=*/-0.34,
+                   /*fix_boundary=*/0, /*preserve_features=*/0,
+                   /*feature_angle=*/30.0, /*guard_inversion=*/1, &moved, &max_disp, &skipped);
     ASSERT_NE(out, nullptr) << mio_last_error();
     EXPECT_EQ(mio_mesh_num_points(out), 4);
     EXPECT_GT(moved, 0);
@@ -1782,8 +1781,8 @@ TEST(CApi, OptimizeVolumeFlipsAndImproves) {
     // The 2-tet fixture whose 2-3 flip raises the worst scaled Jacobian from
     // ~0.066 to ~0.362 (see test_optimize_volume.cpp). relocate off so only the
     // flip acts; every out-param is exercised.
-    const std::vector<double> pts = {0.0,    0.0,    0.0,    1.0,    0.0,   0.0,   0.3,   0.9,
-                                     0.0,    0.2252, 0.2808, 0.6977, 0.4659, 0.3149, -0.0367};
+    const std::vector<double> pts = {0.0, 0.0,    0.0,    1.0,    0.0,    0.0,    0.3,    0.9,
+                                     0.0, 0.2252, 0.2808, 0.6977, 0.4659, 0.3149, -0.0367};
     const std::vector<std::int64_t> conn = {0, 1, 2, 3, 0, 1, 2, 4};
     mio_mesh* m = mio_mesh_create();
     ASSERT_EQ(mio_mesh_set_points(m, MIO_FLOAT64, 5, 3, pts.data()), MIO_OK);
@@ -2395,8 +2394,7 @@ TEST(CApi, HessianCarriesCountersAndShape) {
     std::int64_t got_shape[MIO_MAX_NDIM] = {0};
 
     std::int64_t skipped = -1, fallback = -1;
-    mio_mesh* h =
-        mio_hessian(m, "f", nullptr, nullptr, nullptr, 0, &skipped, &fallback);
+    mio_mesh* h = mio_hessian(m, "f", nullptr, nullptr, nullptr, 0, &skipped, &fallback);
     ASSERT_NE(h, nullptr) << mio_last_error();
     EXPECT_EQ(skipped, 0);
     EXPECT_EQ(fallback, 0);
@@ -2536,8 +2534,8 @@ TEST(CApi, RemeshProducesTheRequestedNumberOfClusters) {
     std::int64_t num_clusters = -1, num_iterations = -1, num_isolated = -1, num_nonmanifold = -1;
     int subdivide_applied = -1;
     mio_mesh* out =
-        mio_remesh(m, 30, -1, 10.0, 4, 100, 10, "isotropic", 0.0, 1, &num_clusters,
-                   &num_iterations, &subdivide_applied, &num_isolated, &num_nonmanifold);
+        mio_remesh(m, 30, -1, 10.0, 4, 100, 10, "isotropic", 0.0, 1, &num_clusters, &num_iterations,
+                   &subdivide_applied, &num_isolated, &num_nonmanifold);
     ASSERT_NE(out, nullptr) << mio_last_error();
     EXPECT_EQ(num_clusters, 30);
     EXPECT_GT(subdivide_applied, 0) << "6 vertices cannot support 30 clusters without subdividing";
@@ -3542,7 +3540,7 @@ namespace {
 /// A regular octahedron: the smallest closed, consistently wound triangle
 /// surface, so Gauss-Bonnet applies and every edge is used exactly twice.
 mio_mesh* capi_curv_octahedron() {
-    const std::vector<double> pts = {1.0,  0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0,  0.0,
+    const std::vector<double> pts = {1.0, 0.0,  0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
                                      0.0, -1.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0, -1.0};
     const std::vector<std::int64_t> conn = {0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4,
                                             2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5};
@@ -3554,6 +3552,188 @@ mio_mesh* capi_curv_octahedron() {
 
 }  // namespace
 
+TEST(CApi, RepairRewindsAndClosesThroughTheFlatAbi) {
+    // The octahedron with two facets flipped: repair must rewind exactly
+    // those two, report a watertight output, and leave the point count alone.
+    // Then the same octahedron minus one facet: the hole is filled by three
+    // triangles in a trailing block.
+    const std::vector<double> pts = {1.0, 0.0,  0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                                     0.0, -1.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0, -1.0};
+    std::vector<std::int64_t> conn = {0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4,
+                                      2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5};
+    std::swap(conn[1], conn[2]);    // flip facet 0
+    std::swap(conn[13], conn[14]);  // flip facet 4
+    mio_mesh* m = mio_mesh_create();
+    ASSERT_EQ(mio_mesh_set_points(m, MIO_FLOAT64, 6, 3, pts.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_cell_block(m, "triangle", 8, 3, MIO_INT64, conn.data()), MIO_OK);
+
+    mio_repair_opts opts;
+    mio_repair_opts_init(&opts);
+    EXPECT_EQ(opts.fix_orientation, 1);  // ON by default -- all-zero is NOT the default
+    EXPECT_EQ(opts.fill_holes, 1);
+    EXPECT_EQ(opts.max_hole_edges, 10);
+    mio_repair_report report;
+    mio_mesh* out = mio_repair(m, &opts, &report);
+    ASSERT_NE(out, nullptr) << mio_last_error();
+    EXPECT_EQ(report.quality_before.inconsistent_pairs, 4);  // 0 and 4 share edge (0,2)
+    EXPECT_EQ(report.quality_after.inconsistent_pairs, 0);
+    EXPECT_NE(report.quality_after.watertight, 0);
+    EXPECT_EQ(report.num_flipped, 2);
+    EXPECT_EQ(report.num_components, 1);
+    EXPECT_EQ(report.num_holes_detected, 0);
+    EXPECT_EQ(mio_mesh_num_points(out), 6);
+    EXPECT_EQ(mio_mesh_num_cell_blocks(out), 1);
+    mio_mesh_free(out);
+    mio_mesh_free(m);
+
+    mio_mesh* holed = mio_mesh_create();
+    ASSERT_EQ(mio_mesh_set_points(holed, MIO_FLOAT64, 6, 3, pts.data()), MIO_OK);
+    const std::vector<std::int64_t> seven = {2, 1, 4, 1, 3, 4, 3, 0, 4, 2, 0,
+                                             5, 1, 2, 5, 3, 1, 5, 0, 3, 5};
+    ASSERT_EQ(mio_mesh_add_cell_block(holed, "triangle", 7, 3, MIO_INT64, seven.data()), MIO_OK);
+    mio_mesh* filled = mio_repair(holed, nullptr, &report);
+    ASSERT_NE(filled, nullptr) << mio_last_error();
+    EXPECT_EQ(report.num_holes_filled, 1);
+    EXPECT_EQ(report.num_faces_added, 3);
+    EXPECT_EQ(report.num_points_added, 1);
+    EXPECT_NE(report.quality_after.watertight, 0);
+    EXPECT_EQ(mio_mesh_num_points(filled), 7);
+    EXPECT_EQ(mio_mesh_num_cell_blocks(filled), 2);
+    mio_mesh_free(filled);
+    mio_mesh_free(holed);
+}
+
+TEST(CApi, ShrinkwrapProjectsOntoAPlaneWithAnOffset) {
+    // A z = 0 square as the target; three points above and below it land at
+    // exactly z = offset. Weights by array name select the second one out.
+    const std::vector<double> tpts = {0, 0, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0};
+    const std::vector<std::int64_t> tconn = {0, 1, 2, 0, 2, 3};
+    mio_mesh* target = mio_mesh_create();
+    ASSERT_EQ(mio_mesh_set_points(target, MIO_FLOAT64, 4, 3, tpts.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_cell_block(target, "triangle", 2, 3, MIO_INT64, tconn.data()), MIO_OK);
+
+    const std::vector<double> pts = {1, 1, 0.5, 2, 2, -0.7, 3, 1, 1.5};
+    const std::vector<std::int64_t> vconn = {0, 1, 2};
+    const std::vector<std::int32_t> pick = {1, 0, 1};
+    const int64_t shape[1] = {3};
+    mio_mesh* src = mio_mesh_create();
+    ASSERT_EQ(mio_mesh_set_points(src, MIO_FLOAT64, 3, 3, pts.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_cell_block(src, "vertex", 3, 1, MIO_INT64, vconn.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_point_data(src, "pick", MIO_INT32, 1, shape, pick.data()), MIO_OK);
+
+    mio_shrinkwrap_opts opts;
+    mio_shrinkwrap_opts_init(&opts);
+    EXPECT_EQ(opts.normal_weight, MIO_SDF_WEIGHT_ANGLE);
+    opts.offset = 0.25;
+    opts.weights = "pick";
+    opts.record_distance = 1;
+    mio_shrinkwrap_report report;
+    mio_mesh* out = mio_shrinkwrap(src, target, &opts, &report);
+    ASSERT_NE(out, nullptr) << mio_last_error();
+    EXPECT_EQ(report.num_projected, 2);
+    EXPECT_EQ(report.num_skipped, 1);
+    EXPECT_EQ(report.num_missed, 0);
+    EXPECT_NEAR(report.max_displacement, 1.25, 1e-15);
+    const void* data = nullptr;
+    mio_dtype dt;
+    ASSERT_EQ(mio_mesh_get_points(out, &data, &dt), MIO_OK);
+    const double* p = static_cast<const double*>(data);
+    EXPECT_NEAR(p[2], 0.25, 1e-15);
+    EXPECT_DOUBLE_EQ(p[5], -0.7);  // unselected: untouched
+    EXPECT_NEAR(p[8], 0.25, 1e-15);
+    mio_mesh_free(out);
+
+    // A volume target is refused by name.
+    opts.weights = nullptr;
+    const std::vector<double> vpts = {0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const std::vector<std::int64_t> tet = {0, 1, 2, 3};
+    mio_mesh* vol = mio_mesh_create();
+    ASSERT_EQ(mio_mesh_set_points(vol, MIO_FLOAT64, 4, 3, vpts.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_cell_block(vol, "tetra", 1, 4, MIO_INT64, tet.data()), MIO_OK);
+    EXPECT_EQ(mio_shrinkwrap(src, vol, &opts, nullptr), nullptr);
+    EXPECT_NE(std::string(mio_last_error()).find("extract_surface"), std::string::npos);
+    mio_mesh_free(vol);
+    mio_mesh_free(src);
+    mio_mesh_free(target);
+}
+
+TEST(CApi, SobolevDeformFiltersADisplacementAndPinsByArray) {
+    // A 3x3 triangle grid with a checkerboard z-displacement: the filter
+    // damps it, a pinned corner does not move, and a constant field with
+    // nothing pinned is preserved exactly with zero iterations.
+    std::vector<double> pts;
+    for (int j = 0; j < 4; ++j)
+        for (int i = 0; i < 4; ++i) {
+            pts.push_back(i);
+            pts.push_back(j);
+            pts.push_back(0.0);
+        }
+    std::vector<std::int64_t> conn;
+    for (int j = 0; j < 3; ++j)
+        for (int i = 0; i < 3; ++i) {
+            const std::int64_t a = j * 4 + i, b = a + 1, c = a + 4, d = c + 1;
+            conn.insert(conn.end(), {a, b, d, a, d, c});
+        }
+    std::vector<double> disp(16 * 3, 0.0);
+    for (int k = 0; k < 16; ++k)
+        disp[k * 3 + 2] = ((k % 4 + k / 4) % 2) ? 0.1 : -0.1;
+    std::vector<std::int32_t> pin(16, 0);
+    pin[0] = 1;
+    const int64_t dshape[2] = {16, 3};
+    const int64_t pshape[1] = {16};
+    mio_mesh* m = mio_mesh_create();
+    ASSERT_EQ(mio_mesh_set_points(m, MIO_FLOAT64, 16, 3, pts.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_cell_block(m, "triangle", 18, 3, MIO_INT64, conn.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_point_data(m, "d", MIO_FLOAT64, 2, dshape, disp.data()), MIO_OK);
+    ASSERT_EQ(mio_mesh_add_point_data(m, "pin", MIO_INT32, 1, pshape, pin.data()), MIO_OK);
+
+    mio_sobolev_opts opts;
+    mio_sobolev_opts_init(&opts);
+    EXPECT_EQ(opts.max_iterations, 128);
+    EXPECT_DOUBLE_EQ(opts.tolerance, 1e-10);
+    // The array name is required.
+    EXPECT_EQ(mio_sobolev_deform(m, &opts, nullptr), nullptr);
+    opts.array = "d";
+    opts.length_scale = 2.0;
+    opts.fixed_points_array = "pin";
+    opts.record_filtered = 1;
+    mio_sobolev_report report;
+    mio_mesh* out = mio_sobolev_deform(m, &opts, &report);
+    ASSERT_NE(out, nullptr) << mio_last_error();
+    EXPECT_NE(report.converged, 0);
+    EXPECT_GT(report.num_iterations, 0);
+    EXPECT_EQ(report.num_fixed, 1);
+    EXPECT_EQ(report.num_isolated, 0);
+    EXPECT_LT(report.residual, 1e-10);
+    EXPECT_GT(report.max_displacement, 0.0);
+    EXPECT_LT(report.max_displacement, 0.1);  // damped
+    const void* data = nullptr;
+    mio_dtype dt;
+    ASSERT_EQ(mio_mesh_get_points(out, &data, &dt), MIO_OK);
+    const double* p = static_cast<const double*>(data);
+    EXPECT_DOUBLE_EQ(p[2], 0.0);                 // pinned
+    EXPECT_EQ(mio_mesh_num_point_data(out), 3);  // d, pin, sobolev:displacement
+    mio_mesh_free(out);
+
+    // A constant field with nothing pinned: exact, zero iterations.
+    std::vector<double> cst(16 * 3, 0.0);
+    for (int k = 0; k < 16; ++k)
+        cst[k * 3 + 1] = 0.4;
+    ASSERT_EQ(mio_mesh_add_point_data(m, "c", MIO_FLOAT64, 2, dshape, cst.data()), MIO_OK);
+    opts.array = "c";
+    opts.fixed_points_array = nullptr;
+    mio_mesh* moved = mio_sobolev_deform(m, &opts, &report);
+    ASSERT_NE(moved, nullptr) << mio_last_error();
+    EXPECT_EQ(report.num_iterations, 0);
+    EXPECT_EQ(report.num_fixed, 0);
+    ASSERT_EQ(mio_mesh_get_points(moved, &data, &dt), MIO_OK);
+    p = static_cast<const double*>(data);
+    for (int k = 0; k < 16; ++k)
+        EXPECT_DOUBLE_EQ(p[k * 3 + 1], pts[k * 3 + 1] + 0.4);
+    mio_mesh_free(moved);
+    mio_mesh_free(m);
+}
+
 TEST(CApi, ComputeCurvatureSatisfiesGaussBonnet) {
     // The tessellation-independent oracle: on a closed surface the angle
     // defects sum to 2*pi*chi, which is 4*pi for anything sphere-like. It is
@@ -3563,7 +3743,7 @@ TEST(CApi, ComputeCurvatureSatisfiesGaussBonnet) {
 
     mio_curvature_opts opts;
     mio_curvature_opts_init(&opts);
-    EXPECT_EQ(opts.mean, 1);      // ON by default -- an all-zero struct is NOT the default
+    EXPECT_EQ(opts.mean, 1);  // ON by default -- an all-zero struct is NOT the default
     EXPECT_EQ(opts.gaussian, 1);
     EXPECT_EQ(opts.dual_area, MIO_CURVATURE_MIXED_VORONOI);
     opts.record_area = 1;
@@ -3602,8 +3782,7 @@ TEST(CApi, ComputeCurvatureSatisfiesGaussBonnet) {
     mio_mesh_free(m);
 
     // A volume mesh is refused by name; no exception crosses the ABI.
-    const std::vector<double> tp = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
-                                    0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const std::vector<double> tp = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     const std::vector<std::int64_t> tc = {0, 1, 2, 3};
     mio_mesh* vol = mio_mesh_create();
     ASSERT_EQ(mio_mesh_set_points(vol, MIO_FLOAT64, 4, 3, tp.data()), MIO_OK);

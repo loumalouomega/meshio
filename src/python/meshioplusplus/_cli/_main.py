@@ -38,9 +38,12 @@ from . import (
     _remesh,
     _remesh_volume,
     _reorder,
+    _repair,
     _sdf,
+    _shrinkwrap,
     _slice,
     _smooth,
+    _sobolev,
     _split,
     _stats,
     _subdivide,
@@ -104,6 +107,27 @@ def main(argv=None):
     )
     _curvature.add_args(parser)
     parser.set_defaults(func=_curvature.curvature_cmd)
+
+    parser = subparsers.add_parser(
+        "repair",
+        help="Fix a surface's orientation, holes and pinched vertices",
+    )
+    _repair.add_args(parser)
+    parser.set_defaults(func=_repair.repair_cmd)
+
+    parser = subparsers.add_parser(
+        "shrinkwrap",
+        help="Project a mesh's points onto a target surface",
+    )
+    _shrinkwrap.add_args(parser)
+    parser.set_defaults(func=_shrinkwrap.shrinkwrap_cmd)
+
+    parser = subparsers.add_parser(
+        "sobolev-deform",
+        help="Filter a displacement field over the mesh's P1 operators and apply it",
+    )
+    _sobolev.add_args(parser)
+    parser.set_defaults(func=_sobolev.sobolev_cmd)
 
     parser = subparsers.add_parser(
         "extract-surface",

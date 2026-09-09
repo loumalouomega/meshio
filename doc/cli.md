@@ -762,6 +762,105 @@ meshioplusplus optimize-volume volume.vtu optimized.vtu --max-iterations 20
 
 ---
 
+## meshioplusplus repair
+
+Fix a surface's orientation, holes and pinched vertices — the three defects `clean` does not touch (see [surface repair](/repair)).
+
+```
+meshioplusplus repair [options] INFILE OUTFILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--no-fix-orientation` | Do not rewind triangles so neighbours across a manifold edge agree |
+| `--no-orient-outward` | Do not flip closed components whose signed volume is negative |
+| `--no-fill-holes` | Do not fan-fill boundary loops |
+| `--no-split-non-manifold` | Do not duplicate bowtie (pinched) vertices |
+| `--max-hole-edges N` | Longest boundary loop still filled; `<= 0` means no limit (default `10`) |
+| `--weld-tolerance T` | Weld coincident points within this distance first, through `clean` (default `0`, off) |
+| `--record-provenance` | Attach `repair:parent_point` (point) and `repair:hole` (cell) |
+| `--quiet` (`-q`) | Suppress the summary output |
+| `--input-format` / `--output-format` (`-i`/`-o`) | Force input/output format |
+
+The passes run in the order weld → triangulate → split bowties → orient → fill holes → orient outward, and the summary reports both the input's and the output's defect counts, so what was fixed and what remains are both visible. Orientation uses the topological half-edge rule — two triangles sharing an edge agree iff they traverse it in opposite directions — which is exact where a normal-angle test mis-orients across a sharp crease. Output is all-triangle at the surface with blocks 1:1 with the input, lower-dimensional blocks carried verbatim, and fill triangles in one trailing `triangle` block. Non-manifold *edges* are counted, never split.
+
+**Examples:**
+
+```sh
+meshioplusplus repair scan.stl fixed.vtu
+meshioplusplus repair scan.stl fixed.vtu --max-hole-edges 0
+meshioplusplus repair scan.stl fixed.vtu --weld-tolerance 1e-9
+meshioplusplus repair in.vtu out.vtu --no-fill-holes --record-provenance
+```
+
+---
+
+## meshioplusplus shrinkwrap
+
+Project a mesh's points onto a target triangle surface (see [shrinkwrap](/shrinkwrap)).
+
+```
+meshioplusplus shrinkwrap [options] INFILE TARGET OUTFILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--offset=X` | Signed offset along the hit feature's unit pseudonormal (a negative value needs the `--offset=` form) |
+| `--max-distance D` | Leave points farther than this from the target alone; `<= 0` means unlimited |
+| `--weights NAME` | Scalar `point_data` array on the source: integer/bool selects, float blends (unclamped) |
+| `--target-region NAME` | Restrict the target to this named cell region |
+| `--normal-weight angle\|area` | Vertex-pseudonormal weighting of the target (default `angle`) |
+| `--record-distance` | Attach `shrinkwrap:distance` (NaN where not queried) |
+| `--record-closest-cell` | Attach `shrinkwrap:closest_cell` (`-1` where not queried) |
+| `--quiet` (`-q`) | Suppress the summary output |
+| `--target-format` | Force the target's format |
+| `--input-format` / `--output-format` (`-i`/`-o`) | Force input/output format |
+
+One projection, not an iteration: there is no self-intersection or inversion guard. Every point of the source moves whatever cells it carries — a volume mesh's interior points too — and only the *target* must be a surface. The offset goes along the hit feature's pseudonormal, which at a crease is the bisector rather than either face's normal.
+
+**Examples:**
+
+```sh
+meshioplusplus shrinkwrap template.vtu scan.stl wrapped.vtu
+meshioplusplus shrinkwrap template.vtu scan.stl wrapped.vtu --offset=0.5
+meshioplusplus shrinkwrap template.vtu scan.stl wrapped.vtu --max-distance 2.0
+meshioplusplus shrinkwrap template.vtu scan.stl out.vtu --weights mask --record-distance
+```
+
+---
+
+## meshioplusplus sobolev-deform
+
+Filter a raw displacement field through the mesh's own P1 operators, then move the points by it (see [Sobolev deformation](/sobolev_deform)).
+
+```
+meshioplusplus sobolev-deform [options] INFILE OUTFILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--array NAME` | **Required.** The `point_data` array holding the raw displacement, `(n, dim)` |
+| `--length-scale L` | **Required.** The smoothing length in mesh units; `0` applies the raw field at the free points |
+| `--fixed-points-array NAME` | An integer/bool `point_data` array whose nonzero entries pin their point |
+| `--fix-boundary` | Also pin every point on a boundary facet of the top-dimensional cells |
+| `--record-filtered` | Attach `sobolev:displacement`, the filtered field |
+| `--max-iterations N` | Conjugate-gradient iteration cap (default `128`) |
+| `--tolerance T` | Relative residual tolerance (default `1e-10`) |
+| `--quiet` (`-q`) | Suppress the summary output |
+| `--input-format` / `--output-format` (`-i`/`-o`) | Force input/output format |
+
+Solves `(M + l^2 K) u = M d` and sets `x' = x + u` — a screened-Poisson low-pass filter whose cutoff wavelength is the length scale. Every block at the mesh's top topological dimension must be a linear simplex (`line`, `triangle`, `tetra`); lower-dimensional blocks ride along. Nothing is pinned by default, so a constant displacement is preserved exactly in zero iterations. Non-convergence is reported rather than raised, with the last iterate returned.
+
+**Examples:**
+
+```sh
+meshioplusplus sobolev-deform in.vtu out.vtu --array d --length-scale 0.5
+meshioplusplus sobolev-deform in.vtu out.vtu --array d --length-scale 0.5 --fix-boundary
+meshioplusplus sobolev-deform in.vtu out.vtu --array d --length-scale 1.0 --record-filtered
+```
+
+---
+
 ## meshioplusplus smooth
 
 Relax point coordinates toward their edge-neighbour centroids to improve element shape (see [smoothing](/smooth)).

@@ -148,6 +148,7 @@ from ._regions import Region
 from ._remesh import remesh
 from ._remesh_volume import remesh_volume
 from ._reorder import compute_bandwidth, reorder
+from ._repair import repair
 from ._sdf import (
     compute_sdf,
     distance_to_surface,
@@ -161,10 +162,12 @@ from ._sequence import (
     sequence_entries,
     write_sequence,
 )
+from ._shrinkwrap import shrinkwrap
 from ._skin import extract_skin
 from ._slice import slice
 from ._smooth import smooth
 from ._sniff import sniff_format
+from ._sobolev_deform import sobolev_deform
 from ._split import split
 from ._stats import compute_stats
 from ._subdivide import subdivide
@@ -255,6 +258,7 @@ __all__ = [
     "isosurface",
     "transform",
     "clean",
+    "repair",
     "crop",
     "split",
     "convert_cells",
@@ -274,6 +278,8 @@ __all__ = [
     "surface_watertight_check",
     "compute_sdf",
     "smooth",
+    "shrinkwrap",
+    "sobolev_deform",
     "partition",
     "partition_labels",
     "run_pipeline",

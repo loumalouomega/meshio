@@ -1665,6 +1665,143 @@ function compute_curvature(m::Mesh; mean::Bool=true, gaussian::Bool=true,
      total_angle_defect=Float64(rep.total_angle_defect))
 end
 
+_quality_tuple(q::_CSurfaceQuality) =
+    (boundary_edges=Int(q.boundary_edges), non_manifold_edges=Int(q.non_manifold_edges),
+     inconsistent_pairs=Int(q.inconsistent_pairs),
+     degenerate_triangles=Int(q.degenerate_triangles), watertight=q.watertight != 0)
+
+"""
+    repair(m; fix_orientation=true, orient_outward=true, fill_holes=true,
+           split_non_manifold=true, max_hole_edges=10, weld_tolerance=0.0,
+           record_provenance=false)
+        -> (; mesh, quality_before, quality_after, num_flipped, num_components,
+             largest_component, num_oriented_outward, num_unorientable,
+             num_vertices_split, num_holes_detected, num_holes_filled,
+             num_holes_skipped, num_faces_added, num_points_added, points_welded)
+
+Repair a surface's orientation, holes and pinched vertices: weld (opt-in) ->
+triangulate (blocks 1:1) -> split bowties -> orient by the topological
+half-edge rule per connected component -> fan-fill boundary loops of at most
+`max_hole_edges` edges (`<= 0` means no limit) -> orient closed components
+outward. Lower-dimensional blocks ride along; fill triangles land in one
+trailing `triangle` block. The C++ index maps are not exposed on the flat ABI.
+See `doc/repair.md`.
+"""
+function repair(m::Mesh; fix_orientation::Bool=true, orient_outward::Bool=true,
+                fill_holes::Bool=true, split_non_manifold::Bool=true,
+                max_hole_edges::Integer=10, weld_tolerance::Real=0.0,
+                record_provenance::Bool=false)
+    report = Ref{_CRepairReport}()
+    opts = _CRepairOpts(fix_orientation ? Int32(1) : Int32(0),
+                        orient_outward ? Int32(1) : Int32(0),
+                        fill_holes ? Int32(1) : Int32(0),
+                        split_non_manifold ? Int32(1) : Int32(0),
+                        record_provenance ? Int32(1) : Int32(0), Int32(0),
+                        Int64(max_hole_edges), Float64(weld_tolerance),
+                        (Int64(0), Int64(0), Int64(0), Int64(0), Int64(0)))
+    ptr = ccall(_sym(:mio_repair), Ptr{Cvoid},
+                (Ptr{Cvoid}, Ref{_CRepairOpts}, Ptr{_CRepairReport}),
+                _handle(m), Ref(opts), report)
+    r = _check_ptr(ptr)
+    rep = report[]
+    (mesh=Mesh(r), quality_before=_quality_tuple(rep.quality_before),
+     quality_after=_quality_tuple(rep.quality_after),
+     num_flipped=Int(rep.num_flipped), num_components=Int(rep.num_components),
+     largest_component=Int(rep.largest_component),
+     num_oriented_outward=Int(rep.num_oriented_outward),
+     num_unorientable=Int(rep.num_unorientable),
+     num_vertices_split=Int(rep.num_vertices_split),
+     num_holes_detected=Int(rep.num_holes_detected),
+     num_holes_filled=Int(rep.num_holes_filled),
+     num_holes_skipped=Int(rep.num_holes_skipped),
+     num_faces_added=Int(rep.num_faces_added),
+     num_points_added=Int(rep.num_points_added), points_welded=Int(rep.points_welded))
+end
+
+const _SHRINKWRAP_WEIGHTS = Dict(:angle => Int32(0), :area => Int32(1))
+
+"""
+    shrinkwrap(m, target; offset=0.0, max_distance=0.0, weights="",
+               target_region="", normal_weight=:angle, record_distance=false,
+               record_closest_cell=false)
+        -> (; mesh, quality, num_projected, num_missed, num_skipped, max_displacement)
+
+Project every (selected) point of `m` onto the surface of `target`:
+`x' = x + w (p + offset n - x)`, one projection, no iteration. Every point of
+the source moves whatever cells it carries; only the target must be a surface.
+`weights` names a point-data array on the source (a float array blends, an
+integer/bool one selects); the offset goes along the hit FEATURE's
+pseudonormal (the bisector at a crease). `quality` is the target's. See
+`doc/shrinkwrap.md`.
+"""
+function shrinkwrap(m::Mesh, target::Mesh; offset::Real=0.0, max_distance::Real=0.0,
+                    weights::AbstractString="", target_region::AbstractString="",
+                    normal_weight::Symbol=:angle, record_distance::Bool=false,
+                    record_closest_cell::Bool=false)
+    haskey(_SHRINKWRAP_WEIGHTS, normal_weight) ||
+        throw(ArgumentError("meshio++: shrinkwrap: unknown normal weight '$(normal_weight)' " *
+                            "(expected :angle or :area)"))
+    report = Ref{_CShrinkwrapReport}()
+    weights_c = Vector{UInt8}(codeunits(String(weights) * "\0"))
+    region_c = Vector{UInt8}(codeunits(String(target_region) * "\0"))
+    ptr = GC.@preserve weights_c region_c begin
+        opts = _CShrinkwrapOpts(Cstring(pointer(weights_c)), Cstring(pointer(region_c)),
+                                Float64(offset), Float64(max_distance), 0.0,
+                                _SHRINKWRAP_WEIGHTS[normal_weight],
+                                record_distance ? Int32(1) : Int32(0),
+                                record_closest_cell ? Int32(1) : Int32(0), Int32(0),
+                                (Int64(0), Int64(0), Int64(0), Int64(0), Int64(0)))
+        ccall(_sym(:mio_shrinkwrap), Ptr{Cvoid},
+              (Ptr{Cvoid}, Ptr{Cvoid}, Ref{_CShrinkwrapOpts}, Ptr{_CShrinkwrapReport}),
+              _handle(m), _handle(target), Ref(opts), report)
+    end
+    r = _check_ptr(ptr)
+    rep = report[]
+    (mesh=Mesh(r), quality=_quality_tuple(rep.quality),
+     num_projected=Int(rep.num_projected), num_missed=Int(rep.num_missed),
+     num_skipped=Int(rep.num_skipped), max_displacement=Float64(rep.max_displacement))
+end
+
+"""
+    sobolev_deform(m, array, length_scale; fixed_points_array="",
+                   fix_boundary=false, record_filtered=false,
+                   max_iterations=128, tolerance=1e-10)
+        -> (; mesh, num_iterations, residual, converged, num_fixed, num_isolated,
+             max_displacement)
+
+Sobolev (Helmholtz-filtered) deformation: solve `(M + l^2 K) u = M d` over the
+mesh's own P1 operators (`K` from the simplex edge Gram matrix, `M` the uniform
+mean lumped mass, matrix-free Jacobi-PCG) and move the points by `u`. `array`
+names the `(n, dim)` point-data displacement; `fixed_points_array` an
+integer/bool point-data array whose nonzero entries pin their point (the C++
+mask form is a flat-ABI gap). Every top-dimensional block must be a linear
+simplex; lower-dimensional blocks ride along. Non-convergence is reported
+through `converged`, never thrown. See `doc/sobolev_deform.md`.
+"""
+function sobolev_deform(m::Mesh, array::AbstractString, length_scale::Real;
+                        fixed_points_array::AbstractString="", fix_boundary::Bool=false,
+                        record_filtered::Bool=false, max_iterations::Integer=128,
+                        tolerance::Real=1e-10)
+    report = Ref{_CSobolevReport}()
+    array_c = Vector{UInt8}(codeunits(String(array) * "\0"))
+    fixed_c = Vector{UInt8}(codeunits(String(fixed_points_array) * "\0"))
+    ptr = GC.@preserve array_c fixed_c begin
+        opts = _CSobolevOpts(Cstring(pointer(array_c)), Cstring(pointer(fixed_c)),
+                             Float64(length_scale), Float64(tolerance),
+                             Int32(max_iterations), fix_boundary ? Int32(1) : Int32(0),
+                             record_filtered ? Int32(1) : Int32(0), Int32(0),
+                             (Int64(0), Int64(0), Int64(0), Int64(0), Int64(0)))
+        ccall(_sym(:mio_sobolev_deform), Ptr{Cvoid},
+              (Ptr{Cvoid}, Ref{_CSobolevOpts}, Ptr{_CSobolevReport}),
+              _handle(m), Ref(opts), report)
+    end
+    r = _check_ptr(ptr)
+    rep = report[]
+    (mesh=Mesh(r), num_iterations=Int(rep.num_iterations), residual=Float64(rep.residual),
+     converged=rep.converged != 0, num_fixed=Int(rep.num_fixed),
+     num_isolated=Int(rep.num_isolated), max_displacement=Float64(rep.max_displacement))
+end
+
 """
     surface_watertight_check(m) -> NamedTuple
 

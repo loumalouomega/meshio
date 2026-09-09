@@ -83,6 +83,9 @@
 #include "meshioplusplus/operations/conservative_interpolate.hpp"
 #include "meshioplusplus/operations/convert_cells.hpp"
 #include "meshioplusplus/operations/curvature.hpp"
+#include "meshioplusplus/operations/repair.hpp"
+#include "meshioplusplus/operations/shrinkwrap.hpp"
+#include "meshioplusplus/operations/sobolev_deform.hpp"
 #include "meshioplusplus/operations/crop.hpp"
 #include "meshioplusplus/operations/data_average.hpp"
 #include "meshioplusplus/operations/decimate.hpp"
@@ -1573,6 +1576,156 @@ PYBIND11_MODULE(_core, m) {
         py::arg("dual_area") = "mixed-voronoi", py::arg("include_boundary") = false,
         py::arg("record_area") = false, py::arg("record_principal") = false,
         py::arg("region") = "");
+
+    // Surface repair: orientation, holes, bowties. {mesh, point_map, cell_maps,
+    // counters, quality_before, quality_after}. See operations/repair.hpp.
+    m.def(
+        "repair",
+        [](py::object pymesh, bool fix_orientation, bool orient_outward, bool fill_holes,
+           bool split_non_manifold, std::int64_t max_hole_edges, double weld_tolerance,
+           bool record_provenance) {
+            meshioplusplus_py::PyMeshRefs refs;
+            meshioplusplus::Mesh cpp = meshioplusplus_py::py_to_mesh(
+                pymesh, refs, /*lenient_field_data=*/false, /*allow_ragged=*/true);
+            meshioplusplus::RepairOptions options;
+            options.mFixOrientation = fix_orientation;
+            options.mOrientOutward = orient_outward;
+            options.mFillHoles = fill_holes;
+            options.mSplitNonManifold = split_non_manifold;
+            options.mMaxHoleEdges = max_hole_edges;
+            options.mWeldTolerance = weld_tolerance;
+            options.mRecordProvenance = record_provenance;
+            meshioplusplus::RepairResult r = meshioplusplus::repair(cpp, options);
+            auto quality = [](const meshioplusplus::SurfaceQuality& q) {
+                py::dict d;
+                d["boundary_edges"] = q.mBoundaryEdges;
+                d["non_manifold_edges"] = q.mNonManifoldEdges;
+                d["inconsistent_pairs"] = q.mInconsistentPairs;
+                d["degenerate_triangles"] = q.mDegenerateTriangles;
+                d["watertight"] = q.mWatertight;
+                return d;
+            };
+            py::dict out;
+            out["mesh"] = meshioplusplus_py::mesh_to_py(std::move(r.mMesh));
+            out["point_map"] = meshioplusplus_py::numpy_from_ndarray(std::move(r.mPointMap));
+            py::list cell_maps;
+            for (auto& a : r.mCellMaps)
+                cell_maps.append(meshioplusplus_py::numpy_from_ndarray(std::move(a)));
+            out["cell_maps"] = cell_maps;
+            out["quality_before"] = quality(r.mQualityBefore);
+            out["quality_after"] = quality(r.mQualityAfter);
+            out["num_flipped"] = r.mNumFlipped;
+            out["num_components"] = r.mNumComponents;
+            out["largest_component"] = r.mLargestComponent;
+            out["num_oriented_outward"] = r.mNumOrientedOutward;
+            out["num_unorientable"] = r.mNumUnorientable;
+            out["num_vertices_split"] = r.mNumVerticesSplit;
+            out["num_holes_detected"] = r.mNumHolesDetected;
+            out["num_holes_filled"] = r.mNumHolesFilled;
+            out["num_holes_skipped"] = r.mNumHolesSkipped;
+            out["num_faces_added"] = r.mNumFacesAdded;
+            out["num_points_added"] = r.mNumPointsAdded;
+            out["points_welded"] = r.mPointsWelded;
+            return out;
+        },
+        py::arg("mesh"), py::arg("fix_orientation") = true, py::arg("orient_outward") = true,
+        py::arg("fill_holes") = true, py::arg("split_non_manifold") = true,
+        py::arg("max_hole_edges") = 10, py::arg("weld_tolerance") = 0.0,
+        py::arg("record_provenance") = false);
+
+    // Shrinkwrap: one projection of the source's points onto the target
+    // surface. {mesh, quality (of the target), counters}. See
+    // operations/shrinkwrap.hpp.
+    m.def(
+        "shrinkwrap",
+        [](py::object pymesh, py::object pytarget, double offset, double max_distance,
+           const std::string& weights, const std::string& target_region,
+           const std::string& normal_weight, bool record_distance, bool record_closest_cell,
+           double grid_cell_size) {
+            meshioplusplus_py::PyMeshRefs refs;
+            meshioplusplus::Mesh cpp = meshioplusplus_py::py_to_mesh(
+                pymesh, refs, /*lenient_field_data=*/false, /*allow_ragged=*/true);
+            meshioplusplus_py::PyMeshRefs trefs;
+            meshioplusplus::Mesh target = meshioplusplus_py::py_to_mesh(
+                pytarget, trefs, /*lenient_field_data=*/true, /*allow_ragged=*/true);
+            meshioplusplus::ShrinkwrapOptions options;
+            options.mOffset = offset;
+            options.mMaxDistance = max_distance;
+            options.mWeights = weights;
+            options.mTargetRegion = target_region;
+            options.mNormalWeight = meshioplusplus::sdf_weight_from_name(normal_weight);
+            options.mRecordDistance = record_distance;
+            options.mRecordClosestCell = record_closest_cell;
+            options.mGridCellSize = grid_cell_size;
+            meshioplusplus::ShrinkwrapResult r = meshioplusplus::shrinkwrap(cpp, target, options);
+            py::dict out;
+            out["mesh"] = meshioplusplus_py::mesh_to_py(std::move(r.mMesh));
+            out["num_projected"] = r.mNumProjected;
+            out["num_missed"] = r.mNumMissed;
+            out["num_skipped"] = r.mNumSkipped;
+            out["max_displacement"] = r.mMaxDisplacement;
+            py::dict q;
+            q["boundary_edges"] = r.mQuality.mBoundaryEdges;
+            q["non_manifold_edges"] = r.mQuality.mNonManifoldEdges;
+            q["inconsistent_pairs"] = r.mQuality.mInconsistentPairs;
+            q["degenerate_triangles"] = r.mQuality.mDegenerateTriangles;
+            q["watertight"] = r.mQuality.mWatertight;
+            out["quality"] = q;
+            return out;
+        },
+        py::arg("mesh"), py::arg("target"), py::arg("offset") = 0.0, py::arg("max_distance") = 0.0,
+        py::arg("weights") = "", py::arg("target_region") = "", py::arg("normal_weight") = "angle",
+        py::arg("record_distance") = false, py::arg("record_closest_cell") = false,
+        py::arg("grid_cell_size") = 0.0);
+
+    // Sobolev deformation: a Helmholtz-filtered displacement over the mesh's
+    // P1 operators. {mesh, counters}. `fixed_points` is a numpy array of point
+    // ids (smooth's `frozen` shape); `fixed_points_array` names a point_data
+    // mask. See operations/sobolev_deform.hpp.
+    m.def(
+        "sobolev_deform",
+        [](py::object pymesh, const std::string& array, double length_scale,
+           py::object fixed_points, const std::string& fixed_points_array, bool fix_boundary,
+           bool record_filtered, int max_iterations, double tolerance) {
+            meshioplusplus_py::PyMeshRefs refs;
+            meshioplusplus::Mesh cpp = meshioplusplus_py::py_to_mesh(
+                pymesh, refs, /*lenient_field_data=*/false, /*allow_ragged=*/true);
+            meshioplusplus::SobolevOptions options;
+            options.mArrayName = array;
+            options.mLengthScale = length_scale;
+            options.mFixedPointsArray = fixed_points_array;
+            options.mFixBoundary = fix_boundary;
+            options.mRecordFiltered = record_filtered;
+            options.mMaxIterations = max_iterations;
+            options.mTolerance = tolerance;
+            if (!fixed_points.is_none()) {
+                py::array_t<std::int64_t> ids =
+                    py::cast<py::array_t<std::int64_t>>(py::array::ensure(fixed_points));
+                options.mFixedPoints.assign(cpp.NumPoints(), 0);
+                auto v = ids.unchecked<1>();
+                for (py::ssize_t k = 0; k < v.shape(0); ++k) {
+                    const std::int64_t id = v(k);
+                    if (id < 0 || static_cast<std::size_t>(id) >= cpp.NumPoints())
+                        throw std::invalid_argument("meshio++: sobolev_deform: fixed point id " +
+                                                    std::to_string(id) + " is out of range");
+                    options.mFixedPoints[static_cast<std::size_t>(id)] = 1;
+                }
+            }
+            meshioplusplus::SobolevResult r = meshioplusplus::sobolev_deform(cpp, options);
+            py::dict out;
+            out["mesh"] = meshioplusplus_py::mesh_to_py(std::move(r.mMesh));
+            out["num_iterations"] = r.mNumIterations;
+            out["residual"] = r.mResidual;
+            out["converged"] = r.mConverged;
+            out["num_fixed"] = r.mNumFixed;
+            out["num_isolated"] = r.mNumIsolated;
+            out["max_displacement"] = r.mMaxDisplacement;
+            return out;
+        },
+        py::arg("mesh"), py::arg("array"), py::arg("length_scale"),
+        py::arg("fixed_points") = py::none(), py::arg("fixed_points_array") = "",
+        py::arg("fix_boundary") = false, py::arg("record_filtered") = false,
+        py::arg("max_iterations") = 128, py::arg("tolerance") = 1e-10);
 
     m.def(
         "hessian",
